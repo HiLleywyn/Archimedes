@@ -86,10 +86,16 @@ class ChatBrain(commands.Cog):
     # ── message routing ───────────────────────────────────────────────────────
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
-        if message.author.bot or not message.guild:
+        if message.author.bot:
             return
         if message.content.startswith(Config.PREFIX):
             return  # a command -- handled by the command processor
+
+        # A direct message is a one-to-one conversation with Archimedes:
+        # every message is addressed to it, no mention or reply needed.
+        if message.guild is None:
+            await self._handle(message, ChatMode.MENTION)
+            return
 
         bot_user = self.bot.user
         ref = message.reference
@@ -136,8 +142,9 @@ class ChatBrain(commands.Cog):
         *, override_text: str | None = None,
     ) -> None:
         guild = message.guild
+        guild_id = guild.id if guild else 0
         author = message.author
-        flags = await self.bot.db.get_ai_flags(guild.id)
+        flags = await self.bot.db.get_ai_flags(guild_id)
         if not flags["chat"]:
             return
 
@@ -167,7 +174,7 @@ class ChatBrain(commands.Cog):
                 )
             return
 
-        allowed, _remaining, quota_ts = await reserve_ai_quota(author.id, guild.id)
+        allowed, _remaining, quota_ts = await reserve_ai_quota(author.id, guild_id)
         if not allowed:
             if mode is ChatMode.ASK:
                 hrs = quota_window_hours()
@@ -183,16 +190,17 @@ class ChatBrain(commands.Cog):
             await self._respond(message, mode, question, images, flags, quota_ts)
         except Exception:  # noqa: BLE001
             log.exception("chat pipeline failed")
-            cancel_ai_quota_reservation(author.id, guild.id, quota_ts)
+            cancel_ai_quota_reservation(author.id, guild_id, quota_ts)
 
     async def _respond(
         self, message: discord.Message, mode: ChatMode, question: str,
         images: list[str], flags: dict, quota_ts: float,
     ) -> None:
         guild = message.guild
+        guild_id = guild.id if guild else 0
         author = message.author
         db = self.bot.db
-        opted_out = await db.is_ai_opted_out(author.id, guild.id)
+        opted_out = await db.is_ai_opted_out(author.id, guild_id)
 
         # Decide where the reply lands: a fresh thread, the current thread,
         # or inline. Threading honours the member's .arch chat/threads pick.
@@ -214,7 +222,7 @@ class ChatBrain(commands.Cog):
             self.bot,
             mode=mode,
             user_id=author.id,
-            guild_id=guild.id,
+            guild_id=guild_id,
             channel=message.channel,
             member=author if isinstance(author, discord.Member) else None,
             display_name=author.display_name,
@@ -243,7 +251,7 @@ class ChatBrain(commands.Cog):
                 )
         except discord.HTTPException as exc:
             log.warning("placeholder send failed: %s", exc)
-            cancel_ai_quota_reservation(author.id, guild.id, quota_ts)
+            cancel_ai_quota_reservation(author.id, guild_id, quota_ts)
             return
 
         timeout = float(Config.AI_REPLY_TIMEOUT_S + (30 if images else 0))
@@ -252,7 +260,7 @@ class ChatBrain(commands.Cog):
             answer = await asyncio.wait_for(
                 self._stream_turn(
                     placeholder, messages,
-                    user_id=author.id, guild_id=guild.id,
+                    user_id=author.id, guild_id=guild_id,
                     channel_id=target_channel.id, out=out,
                 ),
                 timeout=timeout,
@@ -261,7 +269,7 @@ class ChatBrain(commands.Cog):
             answer = None
 
         if not answer:
-            cancel_ai_quota_reservation(author.id, guild.id, quota_ts)
+            cancel_ai_quota_reservation(author.id, guild_id, quota_ts)
             try:
                 await placeholder.edit(content="AI didn't respond. Try again in a sec.")
             except discord.HTTPException:
@@ -270,7 +278,7 @@ class ChatBrain(commands.Cog):
 
         answer = sanitize_output(answer, guild)
         if not answer or looks_like_acrostic(answer):
-            cancel_ai_quota_reservation(author.id, guild.id, quota_ts)
+            cancel_ai_quota_reservation(author.id, guild_id, quota_ts)
             try:
                 await placeholder.edit(content="nice try. not playing that game.")
             except discord.HTTPException:
@@ -293,11 +301,11 @@ class ChatBrain(commands.Cog):
 
         # Persist conversation + learn.
         if not opted_out or history_key != "default":
-            await db.save_ai_message(author.id, guild.id, "user", question, history_key)
-            await db.save_ai_message(author.id, guild.id, "assistant", answer, history_key)
+            await db.save_ai_message(author.id, guild_id, "user", question, history_key)
+            await db.save_ai_message(author.id, guild_id, "assistant", answer, history_key)
         if not opted_out:
             self._spawn(run_post_message_tasks(
-                db, user_id=author.id, guild_id=guild.id,
+                db, user_id=author.id, guild_id=guild_id,
                 display_name=author.display_name, content=question,
                 ai_complete_fn=complete_default, assistant_reply=answer,
             ))
@@ -305,7 +313,7 @@ class ChatBrain(commands.Cog):
         training = getattr(self.bot, "training", None)
         if training is not None:
             self._spawn(training.log_turn(
-                user_id=author.id, guild_id=guild.id, channel_id=target_channel.id,
+                user_id=author.id, guild_id=guild_id, channel_id=target_channel.id,
                 user_message=question, assistant_reply=answer,
                 messages=[*messages, {"role": "assistant", "content": answer}],
                 model=Config.OPENROUTER_MODEL,
@@ -514,6 +522,8 @@ class ChatBrain(commands.Cog):
 
     # ── helpers ───────────────────────────────────────────────────────────────
     async def _threaded(self, message: discord.Message, flags: dict) -> bool:
+        if message.guild is None:
+            return False  # threads do not exist in a direct message
         if not flags.get("threaded", True):
             return False
         if isinstance(message.channel, discord.Thread):

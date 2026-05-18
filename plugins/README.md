@@ -25,9 +25,12 @@ M.manifest = {
   storage     = "myplugin",     -- optional document-store namespace
 }
 
-M.commands = { ... }            -- prefix commands (optional)
-M.tools    = { ... }            -- agent tools (optional)
-M.loops    = { ... }            -- background jobs (optional)
+M.commands  = { ... }           -- prefix commands (optional)
+M.tools     = { ... }           -- agent tools (optional)
+M.loops     = { ... }           -- background jobs (optional)
+M.events    = { ... }           -- event handlers (optional)
+M.on_load   = function() end    -- runs once when the plugin loads (optional)
+M.on_unload = function() end    -- runs once before it unloads (optional)
 
 return M
 ```
@@ -61,10 +64,24 @@ M.tools = {
     name = "fun.coinflip",
     description = "Flip a coin.",
     parameters = { type = "object", properties = {} },  -- a JSON schema
-    handler = function(args) return { result = "heads" } end,
+    handler = function(args, ctx) return { result = "heads" } end,
   },
 }
 ```
+
+A tool `handler` receives `args` (the model's call arguments) and a `ctx`
+table describing the call:
+
+| Field | Purpose |
+|---|---|
+| `ctx.user_id` / `ctx.guild_id` / `ctx.channel_id` | who and where (strings) |
+| `ctx.is_dm` | true when the call came from a direct message |
+| `ctx.user_name(id)` | resolve a user id to a display name |
+| `ctx.store` / `ctx.kv` | the document and key/value stores |
+| `ctx.reply(card)` | post an embed into the conversation's channel |
+| `ctx.dm(user_id, card)` | DM a user an embed |
+
+A handler returns a table; it is sent back to the model as the tool result.
 
 ### Loops
 
@@ -76,6 +93,42 @@ M.loops = {
 
 `interval` is in seconds (minimum 15). Loop handlers use the `arch` global.
 
+### Events
+
+A plugin can react to Discord activity and to other plugins. `M.events` maps
+an event name to a handler:
+
+```lua
+M.events = {
+  message      = function(e) ... end,  -- a message was sent
+  reaction_add = function(e) ... end,  -- a reaction was added
+  member_join  = function(e) ... end,  -- a member joined a server
+  member_leave = function(e) ... end,  -- a member left a server
+  my_signal    = function(e) ... end,  -- a custom event (see arch.emit)
+}
+```
+
+The four names above are **gateway events**; their handlers receive:
+
+| Event | Payload fields |
+|---|---|
+| `message` | `guild_id`, `guild_name`, `channel_id`, `message_id`, `author_id`, `author_name`, `content`, `bot`, `is_dm` |
+| `reaction_add` | `guild_id`, `channel_id`, `message_id`, `user_id`, `emoji`, `bot` |
+| `member_join` | `guild_id`, `guild_name`, `user_id`, `user_name`, `bot`, `joined_at` |
+| `member_leave` | `guild_id`, `guild_name`, `user_id`, `user_name`, `bot` |
+
+Messages from bots (including Archimedes itself) never fire the `message`
+event, so a plugin cannot start a feedback loop. Any **other** name in
+`M.events` is a custom event delivered by `arch.emit` (see below). Event
+handlers should be quick: each runs on its own worker thread.
+
+### Lifecycle hooks
+
+`M.on_load` runs once when the plugin loads and `M.on_unload` runs once before
+it unloads. Both are optional and take no arguments. They can use the full
+`arch` global. An `on_load` that raises aborts the load, so keep it quick and
+defensive.
+
 ## The `arch` global
 
 Available inside every handler:
@@ -83,6 +136,7 @@ Available inside every handler:
 | Field | Purpose |
 |---|---|
 | `arch.store` | the document store (see below) |
+| `arch.kv` | the key/value store (see below) |
 | `arch.colors` | named colour ints: `success`, `error`, `info`, `gold`, ... |
 | `arch.now()` | current UTC epoch (seconds) |
 | `arch.parse_time(text)` | parse `in 2h` / `2026-06-01 14:30` to an epoch, or `nil` |
@@ -92,6 +146,64 @@ Available inside every handler:
 | `arch.dm(user_id, card)` | DM a user an embed |
 | `arch.user_name(user_id)` | resolve a user id to a display name |
 | `arch.log(msg)` | write to the bot log |
+| `arch.http` | the outbound HTTP client (see below) |
+| `arch.discord` | Discord read/write helpers (see below) |
+| `arch.json` | `arch.json.encode(value)` / `arch.json.decode(text)` |
+| `arch.base64` | `arch.base64.encode(text)` / `arch.base64.decode(text)` |
+| `arch.hash(algo, text)` | hex digest, `algo` is `sha256` / `sha1` / `md5` |
+| `arch.uuid()` | a fresh random UUID string |
+| `arch.random(a, b)` | random int in `[a, b]`, or a float in `[0, 1)` with no args |
+| `arch.emit(name, payload)` | broadcast a custom event (see Events) |
+
+### `arch.http`
+
+A guarded outbound HTTP client:
+
+```lua
+local res = arch.http.get("https://api.example.com/data", {
+  headers = { Authorization = "Bearer ..." },
+  timeout = 8,           -- seconds; capped by the operator
+})
+if res.ok then
+  local data = res.json   -- decoded automatically when the body is JSON
+end
+```
+
+`arch.http.get(url, opts)`, `arch.http.post(url, opts)` and
+`arch.http.request(method, url, opts)` all return a table:
+`{ ok, status, body, json, headers, error }`. A refused or failed request
+comes back with `ok = false` and an `error` string rather than raising.
+
+`opts` is optional: `headers`, `body` (a string), `json` (a table sent as a
+JSON body), `timeout`, `max_bytes`, `max_redirects`. The timeout, size and
+redirect values may only lower the operator's caps, never raise them.
+
+Only public `http` / `https` hosts are reachable. Requests to private,
+loopback, link-local and other non-public addresses are blocked, and every
+redirect hop is checked the same way.
+
+### `arch.discord`
+
+Read and write Discord directly. These act as the bot itself and do **not**
+check the calling user's permissions, so treat them as trusted.
+
+| Call | Returns |
+|---|---|
+| `arch.discord.send(channel_id, card)` | `true` on success |
+| `arch.discord.react(channel_id, message_id, emoji)` | `true` on success |
+| `arch.discord.history(channel_id, limit)` | array of `{id, author_id, author_name, content, created_at, bot}` |
+| `arch.discord.channel(channel_id)` | `{id, name, type, guild_id}` or `nil` |
+| `arch.discord.guild(guild_id)` | `{id, name, member_count, owner_id}` or `nil` |
+| `arch.discord.member(guild_id, user_id)` | `{id, name, roles, joined_at, bot}` or `nil` |
+| `arch.discord.roles(guild_id)` | array of `{id, name, color, position}` |
+
+### `arch.emit`
+
+`arch.emit(name, payload)` broadcasts a custom event to every plugin whose
+`M.events` table has a handler for `name`. The handler receives `payload`
+with two extra fields injected: `_event` (the name) and `_from` (the id of
+the plugin that emitted it). `arch.emit` returns how many plugins received
+it.
 
 ## The `ctx` table
 
@@ -105,6 +217,7 @@ A command handler receives `ctx`:
 | `ctx.is_dm` | true in a direct message |
 | `ctx.mentions` | array of `{id, name, bot}` |
 | `ctx.store` | the document store (same as `arch.store`) |
+| `ctx.kv` | the key/value store (same as `arch.kv`) |
 | `ctx.reply(card)` | reply with an embed |
 | `ctx.ok(msg)` / `ctx.error(msg)` | reply with a success / error embed |
 | `ctx.deliver(pages, opts)` | send one card or an array; `opts = {private=true}` DMs it |
@@ -130,6 +243,22 @@ arch.store.delete("notes", id)
 local hits = arch.store.query("notes", { title = "Buy milk" }) -- JSON match
 local all  = arch.store.all("notes")
 ```
+
+## The key/value store
+
+Alongside the document store, `arch.kv` is a simple namespaced key/value
+store for settings and counters. A value may be any JSON-able Lua value.
+
+```lua
+arch.kv.set("greeting", "hello")
+local g    = arch.kv.get("greeting")     -- "hello", or nil if unset
+arch.kv.delete("greeting")
+local keys = arch.kv.keys()              -- array of every key in the namespace
+arch.kv.clear()                          -- drop the whole namespace
+```
+
+It shares the namespace (`manifest.storage`) with the document store, so a
+plugin suite shares its key/value space too.
 
 ## Card tables
 

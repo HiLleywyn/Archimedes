@@ -16,6 +16,7 @@ _MODULES = [
     "framework.context", "framework.db", "framework.audit", "framework.bot",
     "framework.plugins", "framework.plugins.runtime", "framework.plugins.api",
     "framework.plugins.registry", "framework.plugins.manager",
+    "framework.plugins.net", "framework.plugins.util", "framework.plugins.events",
     "ai.emoji_safety", "ai.safety", "ai.quota", "ai.client", "ai.models",
     "ai.prompts", "ai.redis_store", "ai.traits", "ai.memory", "ai.context",
     "ai.tools", "ai.training", "ai.emoji_index",
@@ -296,6 +297,8 @@ async def test_plugin_manager_loads_bundled_plugins() -> None:
     try:
         await bot.plugins.startup()
         assert bot.plugins.loaded_count == len(_BUNDLED_PLUGINS)
+        # The single gateway-event dispatcher cog is registered on startup.
+        assert bot.get_cog("PluginEventDispatcher") is not None
         # Productivity command groups are now plugin-provided.
         for name in ("note", "task", "event", "group"):
             assert bot.get_command(name) is not None
@@ -338,3 +341,169 @@ async def test_help_slash_command_is_registered() -> None:
         for ext in list(bot.extensions):
             await bot.unload_extension(ext)
         await bot.close()
+
+
+# ── Plugin interop: HTTP guard, utilities, events ─────────────────────────────
+# The SSRF guard's decision logic and the pure utilities are fully covered
+# here. The live network leg of arch.http, real gateway events reaching the
+# dispatcher, and arch.discord writes need a running bot and cannot be
+# exercised offline.
+def test_ssrf_guard_blocks_internal_addresses() -> None:
+    from framework.plugins.net import is_blocked_ip
+
+    for addr in ("127.0.0.1", "10.0.0.1", "192.168.1.1", "169.254.0.1",
+                 "::1", "fd00::1", "0.0.0.0", "224.0.0.1", "::ffff:127.0.0.1"):
+        assert is_blocked_ip(addr), f"{addr} should be blocked"
+    for addr in ("8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"):
+        assert not is_blocked_ip(addr), f"{addr} should be allowed"
+    # Unparseable input fails closed.
+    assert is_blocked_ip("not-an-ip")
+
+
+def test_ssrf_guard_rejects_bad_schemes() -> None:
+    from framework.plugins.net import HttpError, validate_url
+
+    for url in ("file:///etc/passwd", "ftp://example.com/x",
+                "gopher://example.com/", "http://",
+                "https://user:pw@example.com/"):
+        with pytest.raises(HttpError):
+            validate_url(url)
+    scheme, host, port = validate_url("https://example.com:8443/path")
+    assert scheme == "https" and host == "example.com" and port == 8443
+
+
+def test_plugin_util_json_hash_encode() -> None:
+    import hashlib
+    import uuid as _uuid
+
+    from framework.plugins import util
+
+    assert util.json_decode(util.json_encode({"a": 1, "b": [2, 3]})) == {
+        "a": 1, "b": [2, 3]}
+    assert util.json_decode("not json at all") is None
+    assert util.b64_decode(util.b64_encode("hello world")) == "hello world"
+    assert util.b64_decode("@@@not base64@@@") is None
+    assert util.hash_text("sha256", "abc") == hashlib.sha256(b"abc").hexdigest()
+    assert util.hash_text("rot13", "abc") is None  # outside the allowlist
+    assert _uuid.UUID(util.make_uuid())            # parses as a real UUID
+    assert util.rand(5, 5) == 5
+    assert 0.0 <= util.rand() < 1.0
+
+
+def test_event_bus_fanout() -> None:
+    from framework.plugins.events import PluginEventBus
+
+    bus = PluginEventBus()
+    bus.subscribe("alpha", "ping", "handler-a")
+    bus.subscribe("beta", "ping", "handler-b")
+    bus.subscribe("alpha", "other", "handler-c")
+    assert {pid for pid, _ in bus.subscribers("ping")} == {"alpha", "beta"}
+    bus.unsubscribe_plugin("alpha")
+    assert {pid for pid, _ in bus.subscribers("ping")} == {"beta"}
+    assert bus.subscribers("other") == []
+
+
+def test_plugin_events_validation() -> None:
+    pytest.importorskip("lupa")
+
+    from framework.plugins.runtime import PluginError, compile_plugin
+
+    good = """
+    local M = {}
+    M.manifest = { id = "ev", name = "Ev", version = "1.0.0" }
+    M.events = { message = function(e) end, my_custom = function(e) end }
+    return M
+    """
+    plugin = compile_plugin(good, expected_id="ev")
+    assert set(plugin.events) == {"message", "my_custom"}
+
+    bad = """
+    local M = {}
+    M.manifest = { id = "ev", name = "Ev", version = "1.0.0" }
+    M.events = { message = 5 }
+    return M
+    """
+    with pytest.raises(PluginError):
+        compile_plugin(bad, expected_id="ev")
+
+
+def test_plugin_lifecycle_hooks_parsed() -> None:
+    pytest.importorskip("lupa")
+
+    from framework.plugins.runtime import compile_plugin
+
+    src = """
+    local M = {}
+    M.manifest = { id = "life", name = "Life", version = "1.0.0" }
+    M.on_load = function() end
+    M.on_unload = function() end
+    return M
+    """
+    plugin = compile_plugin(src, expected_id="life")
+    assert plugin.on_load is not None
+    assert plugin.on_unload is not None
+
+
+async def test_tool_handler_receives_ctx() -> None:
+    pytest.importorskip("lupa")
+
+    import asyncio
+
+    from ai.tools import ToolContext
+    from framework.plugins.api import LuaApi
+    from framework.plugins.runtime import compile_plugin
+
+    src = """
+    local M = {}
+    M.manifest = { id = "ctxprobe", name = "Ctx Probe", version = "1.0.0" }
+    M.tools = {
+      {
+        name = "probe.ctx",
+        description = "Report the call context back to the caller.",
+        parameters = { type = "object", properties = {} },
+        handler = function(args, ctx)
+          return { user = ctx.user_id, guild = ctx.guild_id, dm = ctx.is_dm }
+        end,
+      },
+    }
+    return M
+    """
+    plugin = compile_plugin(src, expected_id="ctxprobe")
+    api = LuaApi(plugin, db=None, bot=None, loop=asyncio.get_running_loop())
+    api.activate()
+    specs = api.build_tools()
+    assert len(specs) == 1
+    ctx = ToolContext(bot=None, db=None, user_id=42, guild_id=7, channel_id=9)
+    result = await specs[0].handler({}, ctx)
+    assert result == {"user": "42", "guild": "7", "dm": False}
+
+
+async def test_dm_message_routes_into_chat_pipeline() -> None:
+    import types
+
+    from ai.context import ChatMode
+    from cogs.chat import ChatBrain
+
+    brain = ChatBrain(bot=None)
+    seen: list = []
+
+    async def fake_handle(message, mode, **_kw) -> None:
+        seen.append(mode)
+
+    brain._handle = fake_handle
+
+    # A direct message with no guild flows straight into the chat pipeline.
+    dm = types.SimpleNamespace(
+        author=types.SimpleNamespace(bot=False),
+        content="hey archimedes", guild=None,
+    )
+    await brain.on_message(dm)
+    assert seen == [ChatMode.MENTION]
+
+    # A bot-authored direct message is still ignored.
+    seen.clear()
+    bot_dm = types.SimpleNamespace(
+        author=types.SimpleNamespace(bot=True), content="hi", guild=None,
+    )
+    await brain.on_message(bot_dm)
+    assert seen == []

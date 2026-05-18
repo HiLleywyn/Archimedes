@@ -260,6 +260,19 @@ CREATE INDEX IF NOT EXISTS idx_plugin_storage_lookup
 CREATE INDEX IF NOT EXISTS idx_plugin_storage_doc
     ON plugin_storage USING GIN (doc);
 
+-- ── Lua plugins: the namespaced key/value store ────────────────────────────
+-- A simple upsert-by-key store, separate from the document store above. The
+-- document store has no unique key, so a key/value `set` belongs here where
+-- the (namespace, key) primary key gives atomic upsert and delete. Namespace
+-- is manifest.storage, so a plugin suite shares its key/value space too.
+CREATE TABLE IF NOT EXISTS plugin_kv (
+    namespace  TEXT  NOT NULL,
+    key        TEXT  NOT NULL,
+    value      JSONB NOT NULL DEFAULT 'null',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (namespace, key)
+);
+
 -- ── Removed: the productivity_* tables ─────────────────────────────────────
 -- Notes, tasks, events and groups are no longer a built-in cog. They ship as
 -- Lua plugins backed by plugin_storage, so the old relational tables are gone.
