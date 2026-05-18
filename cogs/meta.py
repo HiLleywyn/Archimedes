@@ -46,6 +46,14 @@ class Meta(commands.Cog):
                 False,
             )
             .field(
+                "Productivity",
+                f"`{p}note` -- private notes\n"
+                f"`{p}task` -- tasks and to-do lists\n"
+                f"`{p}event` -- calendar events and reminders\n"
+                f"`{p}group` -- groups: invite members and share items",
+                False,
+            )
+            .field(
                 "Staff",
                 f"`{p}ai` -- the AI control surface (Manage Server)",
                 False,

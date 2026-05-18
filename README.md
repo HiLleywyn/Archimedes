@@ -29,6 +29,10 @@ runs the test suite.
   be added with Lua plugins (`plugins/`).
 - **Memory sidecar** -- long-term facts and episodes, passive learning in
   opted-in channels, and an append-only training corpus of every turn.
+- **Productivity** -- private notes, tasks organised into to-do lists, and
+  calendar events with reminders. Personal items stay private (answered in
+  your DMs); groups let members share and collaborate, and any item can be
+  shared, copied, moved or transferred between users and groups.
 - **Thread or inline replies** -- each member picks their style with
   `.arch chat` / `.arch threads`.
 - **Staff control surface** -- `.ai` tunes feature flags, system prompts,
@@ -51,8 +55,37 @@ commands require the Manage Server permission.
 | `.arch ctx [@user\|server\|clear]` | everyone | Inspect / wipe learned context. |
 | `.arch save` / `saved` / `unsave` | everyone | Bookmark Archimedes answers. |
 | `.arch optin` / `optout` | everyone | AI context tracking. |
+| `.note` | everyone | Private notes (answered in your DMs). |
+| `.task` | everyone | Tasks and to-do lists, with optional reminders. |
+| `.event` | everyone | Calendar events with optional reminders. |
+| `.group` | everyone | Create groups, invite members, share and transfer items. |
 | `.ai` | Manage Server | The AI control surface (see `.ai help`). |
 | `.help` / `.ping` / `.about` | everyone | Bot meta. |
+
+### Productivity, privacy and groups
+
+Notes, tasks and events each have an owner. Personal items are yours alone:
+the bot replies in your DMs and tidies the command message away, and personal
+data follows you across every server. Use `.note share <id> @user [edit]` to
+let specific people see one of your items.
+
+A **group** is a shared space. Create one with `.group create <name>`, invite
+members with `.group invite <id> @user`, and they accept with
+`.group join <id>`. Every member can see and edit the group's items, and group
+responses post in the channel so members see them. You can be in many groups.
+
+Targeting and moving items:
+
+- `#<groupid>` at the start of an `add` / `list` argument targets a group
+  (for example `.note add #5 Buy supplies`); no `#` means your personal space.
+- `~<list>` targets a task list (`.task add ~shopping milk`); the default
+  list is `general`.
+- `.note copy <id> <dest>` and `.note move <id> <dest>` accept `me`, an
+  `@user`, or `#<groupid>` as the destination. `.group duplicate <id>` clones
+  a whole group's items into a fresh group you own.
+- Reminders: `.task remind <id> in 2h` or `.event remind <id> 2026-06-01 14:30`.
+  Times accept relative offsets (`in 30m`, `in 3d`, `in 1w`) or absolute
+  `YYYY-MM-DD [HH:MM]` in UTC; a one-minute loop DMs you when one falls due.
 
 ## Setup
 
@@ -111,7 +144,7 @@ pyproject.toml       project metadata + pytest config
 requirements.txt     runtime dependencies
 framework/           bot class, embeds, UI, context, DB layer, audit
 ai/                  model client, memory, traits, context, tools, safety
-cogs/                chat brain, .arch, .ai admin, memory sidecar, meta
+cogs/                chat brain, .arch, .ai admin, sidecar, productivity, meta
 database/schema.sql  idempotent schema, applied on boot
 plugins/             Lua tool plugins (+ a working coinflip example)
 tests/               offline smoke tests

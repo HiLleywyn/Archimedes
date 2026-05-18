@@ -39,6 +39,14 @@ _AI_FLAG_COLUMNS: dict[str, str] = {
     "threaded": "ai_threaded",
 }
 
+# Columns ``update_item`` is allowed to write. Column names are always
+# supplied by bot code, never user input; the allowlist documents the
+# writable surface and stops a typo from silently writing nothing.
+_ITEM_UPDATE_COLUMNS: frozenset[str] = frozenset({
+    "owner_kind", "owner_id", "kind", "list_name", "title", "body",
+    "done", "due_at", "remind_at", "reminded",
+})
+
 
 class Database:
     """Async PostgreSQL handle shared across the whole bot."""
@@ -364,6 +372,275 @@ class Database:
             int(guild_id), int(max_age_days),
         )
         return [int(r["emoji_id"]) for r in rows]
+
+    # ── productivity: groups ──────────────────────────────────────────────────
+    async def create_productivity_group(
+        self, guild_id: int, name: str, owner_id: int,
+    ) -> int:
+        """Create a group, enrol the owner as a member, return the group id."""
+        group_id = await self.fetch_val(
+            "INSERT INTO productivity_groups (guild_id, name, owner_id) "
+            "VALUES ($1,$2,$3) RETURNING id",
+            int(guild_id), name, int(owner_id),
+        )
+        await self.add_group_member(int(group_id), owner_id)
+        return int(group_id)
+
+    async def get_productivity_group(self, group_id: int) -> dict | None:
+        return await self.fetch_one(
+            "SELECT * FROM productivity_groups WHERE id=$1", int(group_id),
+        )
+
+    async def list_user_groups(self, user_id: int) -> list[dict]:
+        return await self.fetch_all(
+            "SELECT g.* FROM productivity_groups g "
+            "JOIN productivity_group_members m ON m.group_id = g.id "
+            "WHERE m.user_id=$1 ORDER BY g.id ASC",
+            int(user_id),
+        )
+
+    async def rename_productivity_group(self, group_id: int, name: str) -> None:
+        await self.execute(
+            "UPDATE productivity_groups SET name=$2 WHERE id=$1",
+            int(group_id), name,
+        )
+
+    async def set_productivity_group_owner(
+        self, group_id: int, owner_id: int,
+    ) -> None:
+        await self.execute(
+            "UPDATE productivity_groups SET owner_id=$2 WHERE id=$1",
+            int(group_id), int(owner_id),
+        )
+
+    async def delete_productivity_group(self, group_id: int) -> None:
+        """Drop a group and everything that hangs off it."""
+        gid = int(group_id)
+        await self.execute(
+            "DELETE FROM productivity_item_shares WHERE item_id IN "
+            "(SELECT id FROM productivity_items "
+            " WHERE owner_kind='group' AND owner_id=$1)",
+            gid,
+        )
+        await self.execute(
+            "DELETE FROM productivity_items "
+            "WHERE owner_kind='group' AND owner_id=$1",
+            gid,
+        )
+        await self.execute(
+            "DELETE FROM productivity_group_members WHERE group_id=$1", gid,
+        )
+        await self.execute(
+            "DELETE FROM productivity_group_invites WHERE group_id=$1", gid,
+        )
+        await self.execute(
+            "DELETE FROM productivity_groups WHERE id=$1", gid,
+        )
+
+    async def count_group_items(self, group_id: int) -> dict[str, int]:
+        rows = await self.fetch_all(
+            "SELECT kind, COUNT(*) AS n FROM productivity_items "
+            "WHERE owner_kind='group' AND owner_id=$1 GROUP BY kind",
+            int(group_id),
+        )
+        return {r["kind"]: int(r["n"]) for r in rows}
+
+    # ── productivity: group membership ────────────────────────────────────────
+    async def add_group_member(self, group_id: int, user_id: int) -> None:
+        await self.execute(
+            "INSERT INTO productivity_group_members (group_id, user_id) "
+            "VALUES ($1,$2) ON CONFLICT DO NOTHING",
+            int(group_id), int(user_id),
+        )
+
+    async def remove_group_member(self, group_id: int, user_id: int) -> bool:
+        status = await self.execute(
+            "DELETE FROM productivity_group_members "
+            "WHERE group_id=$1 AND user_id=$2",
+            int(group_id), int(user_id),
+        )
+        return _rowcount(status) > 0
+
+    async def list_group_members(self, group_id: int) -> list[int]:
+        rows = await self.fetch_all(
+            "SELECT user_id FROM productivity_group_members "
+            "WHERE group_id=$1 ORDER BY joined_at ASC",
+            int(group_id),
+        )
+        return [int(r["user_id"]) for r in rows]
+
+    async def is_group_member(self, group_id: int, user_id: int) -> bool:
+        val = await self.fetch_val(
+            "SELECT 1 FROM productivity_group_members "
+            "WHERE group_id=$1 AND user_id=$2",
+            int(group_id), int(user_id),
+        )
+        return bool(val)
+
+    # ── productivity: group invites ───────────────────────────────────────────
+    async def create_group_invite(
+        self, group_id: int, invitee_id: int, inviter_id: int,
+    ) -> None:
+        await self.execute(
+            "INSERT INTO productivity_group_invites "
+            "(group_id, invitee_id, inviter_id) VALUES ($1,$2,$3) "
+            "ON CONFLICT (group_id, invitee_id) DO UPDATE "
+            "SET inviter_id=EXCLUDED.inviter_id, created_at=NOW()",
+            int(group_id), int(invitee_id), int(inviter_id),
+        )
+
+    async def delete_group_invite(self, group_id: int, invitee_id: int) -> bool:
+        status = await self.execute(
+            "DELETE FROM productivity_group_invites "
+            "WHERE group_id=$1 AND invitee_id=$2",
+            int(group_id), int(invitee_id),
+        )
+        return _rowcount(status) > 0
+
+    async def get_group_invite(
+        self, group_id: int, invitee_id: int,
+    ) -> dict | None:
+        return await self.fetch_one(
+            "SELECT * FROM productivity_group_invites "
+            "WHERE group_id=$1 AND invitee_id=$2",
+            int(group_id), int(invitee_id),
+        )
+
+    async def list_user_invites(self, user_id: int) -> list[dict]:
+        return await self.fetch_all(
+            "SELECT i.*, g.name AS group_name FROM productivity_group_invites i "
+            "JOIN productivity_groups g ON g.id = i.group_id "
+            "WHERE i.invitee_id=$1 ORDER BY i.created_at ASC",
+            int(user_id),
+        )
+
+    # ── productivity: items (notes, tasks, events) ────────────────────────────
+    async def create_item(
+        self, *, owner_kind: str, owner_id: int, kind: str, title: str,
+        created_by: int, body: str = "", list_name: str = "general",
+        done: bool = False, due_at=None, remind_at=None,
+    ) -> int:
+        item_id = await self.fetch_val(
+            "INSERT INTO productivity_items "
+            "(owner_kind, owner_id, kind, list_name, title, body, done, "
+            " due_at, remind_at, created_by) "
+            "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id",
+            owner_kind, int(owner_id), kind, list_name, title, body,
+            bool(done), due_at, remind_at, int(created_by),
+        )
+        return int(item_id)
+
+    async def get_item(self, item_id: int) -> dict | None:
+        return await self.fetch_one(
+            "SELECT * FROM productivity_items WHERE id=$1", int(item_id),
+        )
+
+    async def list_items(
+        self, owner_kind: str, owner_id: int, *, kind: str | None = None,
+        list_name: str | None = None,
+    ) -> list[dict]:
+        query = (
+            "SELECT * FROM productivity_items "
+            "WHERE owner_kind=$1 AND owner_id=$2"
+        )
+        args: list = [owner_kind, int(owner_id)]
+        if kind is not None:
+            args.append(kind)
+            query += f" AND kind=${len(args)}"
+        if list_name is not None:
+            args.append(list_name)
+            query += f" AND list_name=${len(args)}"
+        query += " ORDER BY done ASC, due_at ASC NULLS LAST, id ASC"
+        return await self.fetch_all(query, *args)
+
+    async def list_shared_items(self, user_id: int) -> list[dict]:
+        return await self.fetch_all(
+            "SELECT i.*, s.can_edit FROM productivity_items i "
+            "JOIN productivity_item_shares s ON s.item_id = i.id "
+            "WHERE s.shared_with_id=$1 "
+            "ORDER BY i.done ASC, i.due_at ASC NULLS LAST, i.id ASC",
+            int(user_id),
+        )
+
+    async def update_item(self, item_id: int, **fields) -> bool:
+        cols = {k: v for k, v in fields.items() if k in _ITEM_UPDATE_COLUMNS}
+        if not cols:
+            return False
+        names = list(cols.keys())
+        assignments = ", ".join(f"{n}=${i + 2}" for i, n in enumerate(names))
+        values = [cols[n] for n in names]
+        status = await self.execute(
+            f"UPDATE productivity_items SET {assignments}, updated_at=NOW() "
+            "WHERE id=$1",
+            int(item_id), *values,
+        )
+        return _rowcount(status) > 0
+
+    async def delete_item(self, item_id: int) -> bool:
+        await self.execute(
+            "DELETE FROM productivity_item_shares WHERE item_id=$1",
+            int(item_id),
+        )
+        status = await self.execute(
+            "DELETE FROM productivity_items WHERE id=$1", int(item_id),
+        )
+        return _rowcount(status) > 0
+
+    # ── productivity: item shares ─────────────────────────────────────────────
+    async def add_item_share(
+        self, item_id: int, shared_with_id: int, shared_by_id: int,
+        can_edit: bool = False,
+    ) -> None:
+        await self.execute(
+            "INSERT INTO productivity_item_shares "
+            "(item_id, shared_with_id, shared_by_id, can_edit) "
+            "VALUES ($1,$2,$3,$4) "
+            "ON CONFLICT (item_id, shared_with_id) DO UPDATE "
+            "SET can_edit=EXCLUDED.can_edit",
+            int(item_id), int(shared_with_id), int(shared_by_id),
+            bool(can_edit),
+        )
+
+    async def remove_item_share(
+        self, item_id: int, shared_with_id: int,
+    ) -> bool:
+        status = await self.execute(
+            "DELETE FROM productivity_item_shares "
+            "WHERE item_id=$1 AND shared_with_id=$2",
+            int(item_id), int(shared_with_id),
+        )
+        return _rowcount(status) > 0
+
+    async def list_item_shares(self, item_id: int) -> list[dict]:
+        return await self.fetch_all(
+            "SELECT * FROM productivity_item_shares WHERE item_id=$1 "
+            "ORDER BY created_at ASC",
+            int(item_id),
+        )
+
+    async def get_item_share(
+        self, item_id: int, user_id: int,
+    ) -> dict | None:
+        return await self.fetch_one(
+            "SELECT * FROM productivity_item_shares "
+            "WHERE item_id=$1 AND shared_with_id=$2",
+            int(item_id), int(user_id),
+        )
+
+    # ── productivity: reminders ───────────────────────────────────────────────
+    async def due_reminders(self) -> list[dict]:
+        """Items whose reminder time has passed and have not fired yet."""
+        return await self.fetch_all(
+            "SELECT * FROM productivity_items "
+            "WHERE remind_at IS NOT NULL AND reminded=FALSE "
+            "AND remind_at <= NOW() ORDER BY remind_at ASC LIMIT 100",
+        )
+
+    async def mark_item_reminded(self, item_id: int) -> None:
+        await self.execute(
+            "UPDATE productivity_items SET reminded=TRUE WHERE id=$1",
+            int(item_id),
+        )
 
 
 def _rowcount(status: str) -> int:
