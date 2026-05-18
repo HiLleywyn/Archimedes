@@ -221,66 +221,50 @@ CREATE TABLE IF NOT EXISTS staff_audit (
 CREATE INDEX IF NOT EXISTS idx_staff_audit_lookup
     ON staff_audit (guild_id, scope, created_at);
 
--- ── Productivity: groups, membership and invites ───────────────────────────
--- A productivity group is a user-created collection that members share notes,
--- tasks and events inside. Groups are per-server; the owner is the creator
--- unless ownership is transferred.
-CREATE TABLE IF NOT EXISTS productivity_groups (
+-- ── Lua plugins: the installed-plugin registry ─────────────────────────────
+-- Every plugin Archimedes knows about has a row here -- bundled plugins that
+-- ship in plugins/ and plugins pulled from the marketplace alike. The Lua
+-- source of a marketplace plugin is stored in this row so an installed,
+-- enabled plugin survives a container redeploy with no disk state.
+CREATE TABLE IF NOT EXISTS installed_plugins (
+    plugin_id    TEXT PRIMARY KEY,
+    name         TEXT    NOT NULL,
+    version      TEXT    NOT NULL DEFAULT '0.0.0',
+    origin       TEXT    NOT NULL DEFAULT 'marketplace',
+    description  TEXT    NOT NULL DEFAULT '',
+    author       TEXT    NOT NULL DEFAULT '',
+    category     TEXT    NOT NULL DEFAULT 'General',
+    source       TEXT    NOT NULL DEFAULT '',
+    source_repo  TEXT    NOT NULL DEFAULT '',
+    enabled      BOOLEAN NOT NULL DEFAULT TRUE,
+    installed_by BIGINT,
+    installed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ── Lua plugins: the generic per-plugin document store ─────────────────────
+-- A namespaced document store every plugin can use without writing SQL. Each
+-- record is a JSON document with an auto-assigned id. Plugins that belong to
+-- a suite can share a namespace -- the productivity plugins (notes, tasks,
+-- events, groups) all read and write the 'productivity' namespace.
+CREATE TABLE IF NOT EXISTS plugin_storage (
     id         BIGSERIAL PRIMARY KEY,
-    guild_id   BIGINT NOT NULL,
-    name       TEXT   NOT NULL,
-    owner_id   BIGINT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- One row per member of a group. The owner also has a row here.
-CREATE TABLE IF NOT EXISTS productivity_group_members (
-    group_id  BIGINT NOT NULL,
-    user_id   BIGINT NOT NULL,
-    joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (group_id, user_id)
-);
-
--- Pending invitations into a group, accepted with .group join.
-CREATE TABLE IF NOT EXISTS productivity_group_invites (
-    group_id   BIGINT NOT NULL,
-    invitee_id BIGINT NOT NULL,
-    inviter_id BIGINT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (group_id, invitee_id)
-);
-
--- ── Productivity: items (notes, tasks and calendar events) ─────────────────
--- One table for all three kinds. Personal items carry no guild_id (they are
--- global per user); group items get their server from productivity_groups.
-CREATE TABLE IF NOT EXISTS productivity_items (
-    id         BIGSERIAL PRIMARY KEY,
-    owner_kind TEXT   NOT NULL,
-    owner_id   BIGINT NOT NULL,
-    kind       TEXT   NOT NULL,
-    list_name  TEXT   NOT NULL DEFAULT 'general',
-    title      TEXT   NOT NULL,
-    body       TEXT   NOT NULL DEFAULT '',
-    done       BOOLEAN NOT NULL DEFAULT FALSE,
-    due_at     TIMESTAMPTZ,
-    remind_at  TIMESTAMPTZ,
-    reminded   BOOLEAN NOT NULL DEFAULT FALSE,
-    created_by BIGINT NOT NULL,
+    namespace  TEXT  NOT NULL,
+    collection TEXT  NOT NULL,
+    doc        JSONB NOT NULL DEFAULT '{}',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS idx_productivity_items_owner
-    ON productivity_items (owner_kind, owner_id, kind, list_name);
-CREATE INDEX IF NOT EXISTS idx_productivity_items_remind
-    ON productivity_items (remind_at)
-    WHERE remind_at IS NOT NULL AND reminded = FALSE;
+CREATE INDEX IF NOT EXISTS idx_plugin_storage_lookup
+    ON plugin_storage (namespace, collection, id);
+CREATE INDEX IF NOT EXISTS idx_plugin_storage_doc
+    ON plugin_storage USING GIN (doc);
 
--- A personal item shared directly with another user.
-CREATE TABLE IF NOT EXISTS productivity_item_shares (
-    item_id        BIGINT NOT NULL,
-    shared_with_id BIGINT NOT NULL,
-    shared_by_id   BIGINT NOT NULL,
-    can_edit       BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (item_id, shared_with_id)
-);
+-- ── Removed: the productivity_* tables ─────────────────────────────────────
+-- Notes, tasks, events and groups are no longer a built-in cog. They ship as
+-- Lua plugins backed by plugin_storage, so the old relational tables are gone.
+DROP TABLE IF EXISTS productivity_item_shares;
+DROP TABLE IF EXISTS productivity_items;
+DROP TABLE IF EXISTS productivity_group_invites;
+DROP TABLE IF EXISTS productivity_group_members;
+DROP TABLE IF EXISTS productivity_groups;

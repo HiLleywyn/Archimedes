@@ -49,6 +49,7 @@ _PROMPT_FEATURES = {
 _SEARCH_BACKENDS = ("ddg", "brave")
 _RISK_ICON = {"read": "🟢", "safe": "🔵", "mutate": "🟠", "danger": "🔴"}
 _STATE_ICON = {True: "🟢", False: "🔴"}
+_ORIGIN_ICON = {"bundled": "📦", "marketplace": "🛰️"}
 
 
 class AIAdmin(commands.Cog):
@@ -71,7 +72,8 @@ class AIAdmin(commands.Cog):
                 "Config -- flags, prompts, persona, history",
                 "Models -- per-guild model picker",
                 "Web Search -- search backend",
-                "Tools / Plugins -- agent tool registry + Lua plugins",
+                "Tools -- the agent tool registry",
+                "Plugins -- install and manage Lua plugins",
                 "Memory -- long-term facts and passive learning",
                 "Emojis -- custom emoji meaning index",
                 "Audit -- staff action feed",
@@ -103,12 +105,20 @@ class AIAdmin(commands.Cog):
                 "",
                 "ddg needs no key; brave needs BRAVE_SEARCH_API_KEY.",
             ])],
-            "Tools": [page("Agent Tools and Plugins", [
+            "Tools": [page("Agent Tools", [
                 f"`{p}ai tools list` -- registered tools",
                 f"`{p}ai tools info <name>` -- one tool's schema",
                 f"`{p}ai tools enable|disable <name>`",
-                f"`{p}ai plugins` -- loaded Lua plugins",
-                f"`{p}ai reloadtools` -- reload plugins + rebuild registry",
+            ])],
+            "Plugins": [page("Lua Plugin Manager", [
+                f"`{p}ai plugins` / `list` -- installed plugins",
+                f"`{p}ai plugins info <id>` -- one plugin's details",
+                f"`{p}ai plugins search [query]` -- browse the marketplace",
+                f"`{p}ai plugins install <id>` -- install from the marketplace",
+                f"`{p}ai plugins uninstall <id>` -- remove a plugin",
+                f"`{p}ai plugins enable|disable <id>`",
+                f"`{p}ai plugins update [id]` -- pull the latest version",
+                f"`{p}ai plugins reload [id]` -- recompile and reload",
             ])],
             "Memory": [page("Memory Sidecar", [
                 f"`{p}ai memory facts [scope]` -- list long-term facts",
@@ -504,39 +514,226 @@ class AIAdmin(commands.Cog):
         self.bot.tools.set_enabled(name.strip(), False)
         await ctx.reply_success(f"Tool `{name.strip()}` disabled.", title="Tools")
 
-    @ai.command(name="plugins")
+    # ── plugins ───────────────────────────────────────────────────────────────
+    @ai.group(name="plugins", aliases=["plugin"], invoke_without_command=True)
     @guild_only
     async def ai_plugins(self, ctx: ArchimedesContext) -> None:
-        """List tools registered by Lua plugins."""
-        plugin_tools = self.bot.tools.by_category("plugin")
-        b = card("Lua Plugins", color=C_PURPLE)
-        if not plugin_tools:
-            b.description("No Lua plugin tools loaded. Drop .lua files in plugins/ "
-                          "and run .ai reloadtools.")
-        else:
-            b.description("\n".join(f"`{t.name}` -- {clip(t.description, 70)}"
-                                    for t in plugin_tools))
+        """The Lua plugin manager."""
+        await self._plugins_list(ctx)
+
+    @ai_plugins.command(name="list", aliases=["ls"])
+    @guild_only
+    async def ai_plugins_list(self, ctx: ArchimedesContext) -> None:
+        """List every installed plugin and its state."""
+        await self._plugins_list(ctx)
+
+    async def _plugins_list(self, ctx: ArchimedesContext) -> None:
+        mgr = self.bot.plugins
+        if mgr is None or not mgr.available:
+            await ctx.reply_error("Plugin support is unavailable on this bot.")
+            return
+        plugins = await mgr.list_plugins()
+        if not plugins:
+            await ctx.reply(
+                embed=card("Lua Plugins", color=C_PURPLE,
+                           description="No plugins are installed.").build(),
+                mention_author=False,
+            )
+            return
+        lines = []
+        for p in plugins:
+            icon = "⚪" if not p["enabled"] else ("🟢" if p["loaded"] else "🔴")
+            origin = _ORIGIN_ICON.get(p["origin"], "")
+            lines.append(
+                f"{icon}{origin} `{p['id']}` v{p['version']} -- "
+                f"{clip(p['description'] or p['name'], 64)}"
+            )
+        b = card("Lua Plugins", color=C_PURPLE, description="\n".join(lines))
+        b.footer("🟢 active  🔴 failed  ⚪ disabled    📦 bundled  🛰️ marketplace")
         await ctx.reply(embed=b.build(), mention_author=False)
 
-    @ai.command(name="reloadtools")
+    @ai_plugins.command(name="info", aliases=["show"])
+    @guild_only
+    async def ai_plugins_info(self, ctx: ArchimedesContext, plugin_id: str) -> None:
+        """Show one plugin's manifest, commands and tools."""
+        mgr = self.bot.plugins
+        plugin = None
+        if mgr is not None:
+            plugin = await mgr.get_plugin(plugin_id.strip().lower())
+        if plugin is None:
+            await ctx.reply_error(f"No plugin `{plugin_id}` is installed.")
+            return
+        b = card(f"Plugin -- {plugin['name']}", color=C_PURPLE,
+                 description=plugin["description"] or "(no description)")
+        b.field("ID", plugin["id"], True)
+        b.field("Version", plugin["version"], True)
+        b.field("Origin", plugin["origin"], True)
+        b.field("Category", plugin["category"], True)
+        b.field("Author", plugin["author"] or "unknown", True)
+        b.field("State", "enabled" if plugin["enabled"] else "disabled", True)
+        b.field("Loaded", "yes" if plugin["loaded"] else "no", True)
+        if plugin["commands"]:
+            b.field("Commands", ", ".join(f"`{c}`" for c in plugin["commands"]))
+        if plugin["tools"]:
+            b.field("Agent tools", ", ".join(f"`{t}`" for t in plugin["tools"]))
+        if plugin["error"]:
+            b.field("Last error", clip(plugin["error"], 600))
+        await ctx.reply(embed=b.build(), mention_author=False)
+
+    @ai_plugins.command(name="search", aliases=["browse", "find"])
+    @guild_only
+    async def ai_plugins_search(
+        self, ctx: ArchimedesContext, *, query: str = "",
+    ) -> None:
+        """Search the plugin marketplace."""
+        from framework.plugins.registry import RegistryError
+
+        mgr = self.bot.plugins
+        if mgr is None or not mgr.available:
+            await ctx.reply_error("Plugin support is unavailable on this bot.")
+            return
+        if not mgr.registry.configured:
+            await ctx.reply_error("No plugin marketplace is configured.")
+            return
+        async with ctx.typing():
+            try:
+                results = await mgr.registry.search(query)
+            except RegistryError as exc:
+                await ctx.reply_error(f"Marketplace error: {exc}")
+                return
+        if not results:
+            await ctx.reply(
+                embed=card("Marketplace", color=C_PURPLE, description=(
+                    f"No plugins match `{query}`." if query
+                    else "The marketplace catalogue is empty.")).build(),
+                mention_author=False,
+            )
+            return
+        installed = {p["id"] for p in await mgr.list_plugins()}
+        lines = []
+        for entry in results[:25]:
+            mark = "  (installed)" if entry.get("id") in installed else ""
+            lines.append(
+                f"`{entry.get('id')}` v{entry.get('version', '?')} -- "
+                f"{clip(str(entry.get('description', '')), 66)}{mark}"
+            )
+        b = card(f"Marketplace -- {mgr.registry.repo}", color=C_PURPLE,
+                 description="\n".join(lines))
+        b.footer(f"{len(results)} result(s)  -  "
+                 f"{ctx.prefix}ai plugins install <id>")
+        await ctx.reply(embed=b.build(), mention_author=False)
+
+    @ai_plugins.command(name="install", aliases=["add", "get"])
     @guild_only
     @require_manage_guild
-    async def ai_reloadtools(self, ctx: ArchimedesContext) -> None:
-        """Rebuild the tool registry and reload Lua plugins."""
-        from ai.lua_plugins import load_plugins
-        from ai.tools import build_default_registry
-
-        registry = build_default_registry()
-        count = load_plugins(registry)
-        self.bot.tools = registry
-        await ctx.reply_success(
-            f"Registry rebuilt: {len(registry.all())} tool(s), "
-            f"{count} from Lua plugins.",
-            title="Tools Reloaded",
-        )
+    async def ai_plugins_install(
+        self, ctx: ArchimedesContext, plugin_id: str,
+    ) -> None:
+        """Install a plugin from the marketplace."""
+        mgr = self.bot.plugins
+        if mgr is None:
+            await ctx.reply_error("Plugin support is unavailable on this bot.")
+            return
+        async with ctx.typing():
+            result = await mgr.install(plugin_id.strip().lower(),
+                                       actor_id=ctx.author.id)
+        await ctx.reply_success(result, title="Plugin Install")
         await log_staff_action(
             ctx.db, scope=SCOPE_AI, guild_id=ctx.guild_id, actor_id=ctx.author.id,
-            action="reloadtools", details=f"tools={len(registry.all())}",
+            action="plugin_install", details=plugin_id,
+        )
+
+    @ai_plugins.command(name="uninstall", aliases=["remove", "rm"])
+    @guild_only
+    @require_manage_guild
+    async def ai_plugins_uninstall(
+        self, ctx: ArchimedesContext, plugin_id: str,
+    ) -> None:
+        """Uninstall a marketplace plugin."""
+        mgr = self.bot.plugins
+        if mgr is None:
+            await ctx.reply_error("Plugin support is unavailable on this bot.")
+            return
+        result = await mgr.uninstall(plugin_id.strip().lower())
+        await ctx.reply_success(result, title="Plugin Uninstall")
+        await log_staff_action(
+            ctx.db, scope=SCOPE_AI, guild_id=ctx.guild_id, actor_id=ctx.author.id,
+            action="plugin_uninstall", severity=SEVERITY_WARN, details=plugin_id,
+        )
+
+    @ai_plugins.command(name="enable")
+    @guild_only
+    @require_manage_guild
+    async def ai_plugins_enable(
+        self, ctx: ArchimedesContext, plugin_id: str,
+    ) -> None:
+        """Enable an installed plugin and load it."""
+        mgr = self.bot.plugins
+        if mgr is None:
+            await ctx.reply_error("Plugin support is unavailable on this bot.")
+            return
+        result = await mgr.enable(plugin_id.strip().lower())
+        await ctx.reply_success(result, title="Plugins")
+        await log_staff_action(
+            ctx.db, scope=SCOPE_AI, guild_id=ctx.guild_id, actor_id=ctx.author.id,
+            action="plugin_enable", details=plugin_id,
+        )
+
+    @ai_plugins.command(name="disable")
+    @guild_only
+    @require_manage_guild
+    async def ai_plugins_disable(
+        self, ctx: ArchimedesContext, plugin_id: str,
+    ) -> None:
+        """Disable an installed plugin and unload it."""
+        mgr = self.bot.plugins
+        if mgr is None:
+            await ctx.reply_error("Plugin support is unavailable on this bot.")
+            return
+        result = await mgr.disable(plugin_id.strip().lower())
+        await ctx.reply_success(result, title="Plugins")
+        await log_staff_action(
+            ctx.db, scope=SCOPE_AI, guild_id=ctx.guild_id, actor_id=ctx.author.id,
+            action="plugin_disable", details=plugin_id,
+        )
+
+    @ai_plugins.command(name="update", aliases=["upgrade"])
+    @guild_only
+    @require_manage_guild
+    async def ai_plugins_update(
+        self, ctx: ArchimedesContext, plugin_id: str,
+    ) -> None:
+        """Pull the latest version of a marketplace plugin."""
+        mgr = self.bot.plugins
+        if mgr is None:
+            await ctx.reply_error("Plugin support is unavailable on this bot.")
+            return
+        async with ctx.typing():
+            result = await mgr.update(plugin_id.strip().lower())
+        await ctx.reply_success(result, title="Plugin Update")
+        await log_staff_action(
+            ctx.db, scope=SCOPE_AI, guild_id=ctx.guild_id, actor_id=ctx.author.id,
+            action="plugin_update", details=plugin_id,
+        )
+
+    @ai_plugins.command(name="reload")
+    @guild_only
+    @require_manage_guild
+    async def ai_plugins_reload(
+        self, ctx: ArchimedesContext, plugin_id: str | None = None,
+    ) -> None:
+        """Recompile and reload one plugin, or every plugin."""
+        mgr = self.bot.plugins
+        if mgr is None:
+            await ctx.reply_error("Plugin support is unavailable on this bot.")
+            return
+        async with ctx.typing():
+            target = plugin_id.strip().lower() if plugin_id else None
+            result = await mgr.reload(target)
+        await ctx.reply_success(result, title="Plugin Reload")
+        await log_staff_action(
+            ctx.db, scope=SCOPE_AI, guild_id=ctx.guild_id, actor_id=ctx.author.id,
+            action="plugin_reload", details=plugin_id or "all",
         )
 
     # ── memory ────────────────────────────────────────────────────────────────

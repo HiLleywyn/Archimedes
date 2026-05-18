@@ -9,6 +9,7 @@ method here, never copy-pasted SQL across cogs.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 
@@ -39,12 +40,12 @@ _AI_FLAG_COLUMNS: dict[str, str] = {
     "threaded": "ai_threaded",
 }
 
-# Columns ``update_item`` is allowed to write. Column names are always
-# supplied by bot code, never user input; the allowlist documents the
+# Columns ``update_installed_plugin`` is allowed to write. Column names are
+# always supplied by bot code, never user input; the allowlist documents the
 # writable surface and stops a typo from silently writing nothing.
-_ITEM_UPDATE_COLUMNS: frozenset[str] = frozenset({
-    "owner_kind", "owner_id", "kind", "list_name", "title", "body",
-    "done", "due_at", "remind_at", "reminded",
+_PLUGIN_UPDATE_COLUMNS: frozenset[str] = frozenset({
+    "name", "version", "description", "author", "category",
+    "source", "source_repo", "enabled",
 })
 
 
@@ -373,274 +374,143 @@ class Database:
         )
         return [int(r["emoji_id"]) for r in rows]
 
-    # ── productivity: groups ──────────────────────────────────────────────────
-    async def create_productivity_group(
-        self, guild_id: int, name: str, owner_id: int,
-    ) -> int:
-        """Create a group, enrol the owner as a member, return the group id."""
-        group_id = await self.fetch_val(
-            "INSERT INTO productivity_groups (guild_id, name, owner_id) "
-            "VALUES ($1,$2,$3) RETURNING id",
-            int(guild_id), name, int(owner_id),
-        )
-        await self.add_group_member(int(group_id), owner_id)
-        return int(group_id)
-
-    async def get_productivity_group(self, group_id: int) -> dict | None:
-        return await self.fetch_one(
-            "SELECT * FROM productivity_groups WHERE id=$1", int(group_id),
-        )
-
-    async def list_user_groups(self, user_id: int) -> list[dict]:
+    # ── Lua plugins: the installed-plugin registry ────────────────────────────
+    async def list_installed_plugins(self) -> list[dict]:
+        """Every plugin row, bundled and marketplace alike, oldest first."""
         return await self.fetch_all(
-            "SELECT g.* FROM productivity_groups g "
-            "JOIN productivity_group_members m ON m.group_id = g.id "
-            "WHERE m.user_id=$1 ORDER BY g.id ASC",
-            int(user_id),
+            "SELECT * FROM installed_plugins ORDER BY installed_at ASC, plugin_id ASC",
         )
 
-    async def rename_productivity_group(self, group_id: int, name: str) -> None:
-        await self.execute(
-            "UPDATE productivity_groups SET name=$2 WHERE id=$1",
-            int(group_id), name,
+    async def get_installed_plugin(self, plugin_id: str) -> dict | None:
+        return await self.fetch_one(
+            "SELECT * FROM installed_plugins WHERE plugin_id=$1", str(plugin_id),
         )
 
-    async def set_productivity_group_owner(
-        self, group_id: int, owner_id: int,
+    async def upsert_installed_plugin(
+        self, *, plugin_id: str, name: str, version: str, origin: str,
+        description: str = "", author: str = "", category: str = "General",
+        source: str = "", source_repo: str = "", enabled: bool = True,
+        installed_by: int | None = None,
     ) -> None:
+        """Insert a plugin row, or refresh its metadata if it already exists.
+
+        ``enabled`` is only written on first insert -- a refresh of a bundled
+        plugin must never silently flip an operator's enable/disable choice.
+        """
         await self.execute(
-            "UPDATE productivity_groups SET owner_id=$2 WHERE id=$1",
-            int(group_id), int(owner_id),
+            "INSERT INTO installed_plugins "
+            "(plugin_id, name, version, origin, description, author, category, "
+            " source, source_repo, enabled, installed_by) "
+            "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) "
+            "ON CONFLICT (plugin_id) DO UPDATE SET "
+            "name=EXCLUDED.name, version=EXCLUDED.version, origin=EXCLUDED.origin, "
+            "description=EXCLUDED.description, author=EXCLUDED.author, "
+            "category=EXCLUDED.category, source=EXCLUDED.source, "
+            "source_repo=EXCLUDED.source_repo, updated_at=NOW()",
+            str(plugin_id), name, version, origin, description, author, category,
+            source, source_repo, bool(enabled),
+            int(installed_by) if installed_by else None,
         )
 
-    async def delete_productivity_group(self, group_id: int) -> None:
-        """Drop a group and everything that hangs off it."""
-        gid = int(group_id)
-        await self.execute(
-            "DELETE FROM productivity_item_shares WHERE item_id IN "
-            "(SELECT id FROM productivity_items "
-            " WHERE owner_kind='group' AND owner_id=$1)",
-            gid,
-        )
-        await self.execute(
-            "DELETE FROM productivity_items "
-            "WHERE owner_kind='group' AND owner_id=$1",
-            gid,
-        )
-        await self.execute(
-            "DELETE FROM productivity_group_members WHERE group_id=$1", gid,
-        )
-        await self.execute(
-            "DELETE FROM productivity_group_invites WHERE group_id=$1", gid,
-        )
-        await self.execute(
-            "DELETE FROM productivity_groups WHERE id=$1", gid,
-        )
-
-    async def count_group_items(self, group_id: int) -> dict[str, int]:
-        rows = await self.fetch_all(
-            "SELECT kind, COUNT(*) AS n FROM productivity_items "
-            "WHERE owner_kind='group' AND owner_id=$1 GROUP BY kind",
-            int(group_id),
-        )
-        return {r["kind"]: int(r["n"]) for r in rows}
-
-    # ── productivity: group membership ────────────────────────────────────────
-    async def add_group_member(self, group_id: int, user_id: int) -> None:
-        await self.execute(
-            "INSERT INTO productivity_group_members (group_id, user_id) "
-            "VALUES ($1,$2) ON CONFLICT DO NOTHING",
-            int(group_id), int(user_id),
-        )
-
-    async def remove_group_member(self, group_id: int, user_id: int) -> bool:
-        status = await self.execute(
-            "DELETE FROM productivity_group_members "
-            "WHERE group_id=$1 AND user_id=$2",
-            int(group_id), int(user_id),
-        )
-        return _rowcount(status) > 0
-
-    async def list_group_members(self, group_id: int) -> list[int]:
-        rows = await self.fetch_all(
-            "SELECT user_id FROM productivity_group_members "
-            "WHERE group_id=$1 ORDER BY joined_at ASC",
-            int(group_id),
-        )
-        return [int(r["user_id"]) for r in rows]
-
-    async def is_group_member(self, group_id: int, user_id: int) -> bool:
-        val = await self.fetch_val(
-            "SELECT 1 FROM productivity_group_members "
-            "WHERE group_id=$1 AND user_id=$2",
-            int(group_id), int(user_id),
-        )
-        return bool(val)
-
-    # ── productivity: group invites ───────────────────────────────────────────
-    async def create_group_invite(
-        self, group_id: int, invitee_id: int, inviter_id: int,
-    ) -> None:
-        await self.execute(
-            "INSERT INTO productivity_group_invites "
-            "(group_id, invitee_id, inviter_id) VALUES ($1,$2,$3) "
-            "ON CONFLICT (group_id, invitee_id) DO UPDATE "
-            "SET inviter_id=EXCLUDED.inviter_id, created_at=NOW()",
-            int(group_id), int(invitee_id), int(inviter_id),
-        )
-
-    async def delete_group_invite(self, group_id: int, invitee_id: int) -> bool:
-        status = await self.execute(
-            "DELETE FROM productivity_group_invites "
-            "WHERE group_id=$1 AND invitee_id=$2",
-            int(group_id), int(invitee_id),
-        )
-        return _rowcount(status) > 0
-
-    async def get_group_invite(
-        self, group_id: int, invitee_id: int,
-    ) -> dict | None:
-        return await self.fetch_one(
-            "SELECT * FROM productivity_group_invites "
-            "WHERE group_id=$1 AND invitee_id=$2",
-            int(group_id), int(invitee_id),
-        )
-
-    async def list_user_invites(self, user_id: int) -> list[dict]:
-        return await self.fetch_all(
-            "SELECT i.*, g.name AS group_name FROM productivity_group_invites i "
-            "JOIN productivity_groups g ON g.id = i.group_id "
-            "WHERE i.invitee_id=$1 ORDER BY i.created_at ASC",
-            int(user_id),
-        )
-
-    # ── productivity: items (notes, tasks, events) ────────────────────────────
-    async def create_item(
-        self, *, owner_kind: str, owner_id: int, kind: str, title: str,
-        created_by: int, body: str = "", list_name: str = "general",
-        done: bool = False, due_at=None, remind_at=None,
-    ) -> int:
-        item_id = await self.fetch_val(
-            "INSERT INTO productivity_items "
-            "(owner_kind, owner_id, kind, list_name, title, body, done, "
-            " due_at, remind_at, created_by) "
-            "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id",
-            owner_kind, int(owner_id), kind, list_name, title, body,
-            bool(done), due_at, remind_at, int(created_by),
-        )
-        return int(item_id)
-
-    async def get_item(self, item_id: int) -> dict | None:
-        return await self.fetch_one(
-            "SELECT * FROM productivity_items WHERE id=$1", int(item_id),
-        )
-
-    async def list_items(
-        self, owner_kind: str, owner_id: int, *, kind: str | None = None,
-        list_name: str | None = None,
-    ) -> list[dict]:
-        query = (
-            "SELECT * FROM productivity_items "
-            "WHERE owner_kind=$1 AND owner_id=$2"
-        )
-        args: list = [owner_kind, int(owner_id)]
-        if kind is not None:
-            args.append(kind)
-            query += f" AND kind=${len(args)}"
-        if list_name is not None:
-            args.append(list_name)
-            query += f" AND list_name=${len(args)}"
-        query += " ORDER BY done ASC, due_at ASC NULLS LAST, id ASC"
-        return await self.fetch_all(query, *args)
-
-    async def list_shared_items(self, user_id: int) -> list[dict]:
-        return await self.fetch_all(
-            "SELECT i.*, s.can_edit FROM productivity_items i "
-            "JOIN productivity_item_shares s ON s.item_id = i.id "
-            "WHERE s.shared_with_id=$1 "
-            "ORDER BY i.done ASC, i.due_at ASC NULLS LAST, i.id ASC",
-            int(user_id),
-        )
-
-    async def update_item(self, item_id: int, **fields) -> bool:
-        cols = {k: v for k, v in fields.items() if k in _ITEM_UPDATE_COLUMNS}
+    async def update_installed_plugin(self, plugin_id: str, **fields) -> bool:
+        cols = {k: v for k, v in fields.items() if k in _PLUGIN_UPDATE_COLUMNS}
         if not cols:
             return False
         names = list(cols.keys())
         assignments = ", ".join(f"{n}=${i + 2}" for i, n in enumerate(names))
         values = [cols[n] for n in names]
         status = await self.execute(
-            f"UPDATE productivity_items SET {assignments}, updated_at=NOW() "
-            "WHERE id=$1",
-            int(item_id), *values,
+            f"UPDATE installed_plugins SET {assignments}, updated_at=NOW() "
+            "WHERE plugin_id=$1",
+            str(plugin_id), *values,
         )
         return _rowcount(status) > 0
 
-    async def delete_item(self, item_id: int) -> bool:
-        await self.execute(
-            "DELETE FROM productivity_item_shares WHERE item_id=$1",
-            int(item_id),
-        )
+    async def delete_installed_plugin(self, plugin_id: str) -> bool:
         status = await self.execute(
-            "DELETE FROM productivity_items WHERE id=$1", int(item_id),
+            "DELETE FROM installed_plugins WHERE plugin_id=$1", str(plugin_id),
         )
         return _rowcount(status) > 0
 
-    # ── productivity: item shares ─────────────────────────────────────────────
-    async def add_item_share(
-        self, item_id: int, shared_with_id: int, shared_by_id: int,
-        can_edit: bool = False,
-    ) -> None:
-        await self.execute(
-            "INSERT INTO productivity_item_shares "
-            "(item_id, shared_with_id, shared_by_id, can_edit) "
-            "VALUES ($1,$2,$3,$4) "
-            "ON CONFLICT (item_id, shared_with_id) DO UPDATE "
-            "SET can_edit=EXCLUDED.can_edit",
-            int(item_id), int(shared_with_id), int(shared_by_id),
-            bool(can_edit),
+    # ── Lua plugins: the generic document store ───────────────────────────────
+    async def plugin_store_put(
+        self, namespace: str, collection: str, doc: dict,
+    ) -> int:
+        """Insert one document, returning its auto-assigned id."""
+        new_id = await self.fetch_val(
+            "INSERT INTO plugin_storage (namespace, collection, doc) "
+            "VALUES ($1,$2,$3::jsonb) RETURNING id",
+            str(namespace), str(collection), _json_dumps(doc),
         )
+        return int(new_id)
 
-    async def remove_item_share(
-        self, item_id: int, shared_with_id: int,
+    async def plugin_store_get(
+        self, namespace: str, collection: str, record_id: int,
+    ) -> dict | None:
+        row = await self.fetch_one(
+            "SELECT id, doc FROM plugin_storage "
+            "WHERE namespace=$1 AND collection=$2 AND id=$3",
+            str(namespace), str(collection), int(record_id),
+        )
+        return _store_row(row)
+
+    async def plugin_store_update(
+        self, namespace: str, collection: str, record_id: int, doc: dict,
     ) -> bool:
         status = await self.execute(
-            "DELETE FROM productivity_item_shares "
-            "WHERE item_id=$1 AND shared_with_id=$2",
-            int(item_id), int(shared_with_id),
+            "UPDATE plugin_storage SET doc=$4::jsonb, updated_at=NOW() "
+            "WHERE namespace=$1 AND collection=$2 AND id=$3",
+            str(namespace), str(collection), int(record_id), _json_dumps(doc),
         )
         return _rowcount(status) > 0
 
-    async def list_item_shares(self, item_id: int) -> list[dict]:
-        return await self.fetch_all(
-            "SELECT * FROM productivity_item_shares WHERE item_id=$1 "
-            "ORDER BY created_at ASC",
-            int(item_id),
+    async def plugin_store_delete(
+        self, namespace: str, collection: str, record_id: int,
+    ) -> bool:
+        status = await self.execute(
+            "DELETE FROM plugin_storage "
+            "WHERE namespace=$1 AND collection=$2 AND id=$3",
+            str(namespace), str(collection), int(record_id),
         )
+        return _rowcount(status) > 0
 
-    async def get_item_share(
-        self, item_id: int, user_id: int,
-    ) -> dict | None:
-        return await self.fetch_one(
-            "SELECT * FROM productivity_item_shares "
-            "WHERE item_id=$1 AND shared_with_id=$2",
-            int(item_id), int(user_id),
-        )
+    async def plugin_store_query(
+        self, namespace: str, collection: str, match: dict | None = None,
+    ) -> list[dict]:
+        """Return documents in a collection, filtered by JSON containment.
 
-    # ── productivity: reminders ───────────────────────────────────────────────
-    async def due_reminders(self) -> list[dict]:
-        """Items whose reminder time has passed and have not fired yet."""
-        return await self.fetch_all(
-            "SELECT * FROM productivity_items "
-            "WHERE remind_at IS NOT NULL AND reminded=FALSE "
-            "AND remind_at <= NOW() ORDER BY remind_at ASC LIMIT 100",
-        )
+        ``match`` is an equality filter -- every key/value pair must be
+        present in the stored document. ``None`` or ``{}`` returns the lot.
+        """
+        if match:
+            rows = await self.fetch_all(
+                "SELECT id, doc FROM plugin_storage "
+                "WHERE namespace=$1 AND collection=$2 AND doc @> $3::jsonb "
+                "ORDER BY id ASC",
+                str(namespace), str(collection), _json_dumps(match),
+            )
+        else:
+            rows = await self.fetch_all(
+                "SELECT id, doc FROM plugin_storage "
+                "WHERE namespace=$1 AND collection=$2 ORDER BY id ASC",
+                str(namespace), str(collection),
+            )
+        return [_store_row(r) for r in rows]
 
-    async def mark_item_reminded(self, item_id: int) -> None:
-        await self.execute(
-            "UPDATE productivity_items SET reminded=TRUE WHERE id=$1",
-            int(item_id),
-        )
+    async def plugin_store_clear(
+        self, namespace: str, collection: str | None = None,
+    ) -> int:
+        """Drop every document in a namespace (or one collection of it)."""
+        if collection is None:
+            status = await self.execute(
+                "DELETE FROM plugin_storage WHERE namespace=$1", str(namespace),
+            )
+        else:
+            status = await self.execute(
+                "DELETE FROM plugin_storage WHERE namespace=$1 AND collection=$2",
+                str(namespace), str(collection),
+            )
+        return _rowcount(status)
 
 
 def _rowcount(status: str) -> int:
@@ -649,3 +519,30 @@ def _rowcount(status: str) -> int:
         return int(str(status).rsplit(" ", 1)[-1])
     except (ValueError, IndexError):
         return 0
+
+
+def _json_dumps(value) -> str:
+    """Serialise a plugin document for a JSONB column."""
+    return json.dumps(value if value is not None else {}, default=str)
+
+
+def _store_row(row: dict | None) -> dict | None:
+    """Flatten a plugin_storage row into ``{id, ...doc}`` for callers.
+
+    The document is stored as JSONB, so asyncpg may hand it back as a JSON
+    string; decode it either way. ``id`` always wins over a stray ``id`` key
+    inside the document.
+    """
+    if row is None:
+        return None
+    doc = row.get("doc")
+    if isinstance(doc, str):
+        try:
+            doc = json.loads(doc)
+        except (ValueError, TypeError):
+            doc = {}
+    if not isinstance(doc, dict):
+        doc = {}
+    out = dict(doc)
+    out["id"] = int(row["id"])
+    return out
