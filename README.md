@@ -60,7 +60,8 @@ commands require the Manage Server permission.
 | `.event` | everyone | Calendar events with optional reminders. |
 | `.group` | everyone | Create groups, invite members, share and transfer items. |
 | `.ai` | Manage Server | The AI control surface (see `.ai help`). |
-| `.help` / `.ping` / `.about` | everyone | Bot meta. |
+| `/help` or `.help` | everyone | A menu of sections, every command with examples. |
+| `.ping` / `.about` | everyone | Latency and bot info. |
 
 ### Productivity, privacy and groups
 

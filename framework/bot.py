@@ -82,6 +82,12 @@ class ArchimedesBot(commands.Bot):
             except Exception:  # noqa: BLE001
                 log.exception("failed to load cog: %s", ext)
 
+        try:
+            synced = await self.tree.sync()
+            log.info("synced %d application command(s)", len(synced))
+        except Exception:  # noqa: BLE001
+            log.exception("failed to sync application commands")
+
     async def on_ready(self) -> None:
         log.info("Logged in as %s (id=%s) in %d guild(s)",
                  self.user, getattr(self.user, "id", "?"), len(self.guilds))

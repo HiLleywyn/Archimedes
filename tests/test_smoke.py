@@ -146,3 +146,30 @@ def test_split_sigils_peels_group_and_list() -> None:
     group_id, list_name, text = _split_sigils("just a plain note")
     assert group_id is None and list_name is None
     assert text == "just a plain note"
+
+
+def test_help_catalogue_builds_within_embed_limits() -> None:
+    from cogs.meta import build_help_categories
+
+    cats = build_help_categories(".")
+    assert len(cats) >= 6
+    for name, pages in cats.items():
+        assert pages, f"section {name!r} has no pages"
+        for embed in pages:
+            assert embed.title, f"section {name!r} has a page with no title"
+            assert len(embed) <= 6000, f"section {name!r} page is over the limit"
+            assert len(embed.fields) <= 25
+
+
+async def test_help_slash_command_is_registered() -> None:
+    from framework.bot import ArchimedesBot
+
+    bot = ArchimedesBot()
+    try:
+        await bot.load_extension("cogs.meta")
+        assert bot.tree.get_command("help") is not None
+        assert bot.get_command("help") is not None
+    finally:
+        for ext in list(bot.extensions):
+            await bot.unload_extension(ext)
+        await bot.close()
