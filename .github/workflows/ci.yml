@@ -1,0 +1,31 @@
+# CI for the standalone Disco AI repository.
+#
+# This workflow is dormant while discoai-bot/ lives inside another repo
+# (GitHub only runs workflows from the repository root's .github/). Once
+# the folder is the root of its own repository, this activates automatically.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: Lint and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Byte-compile every module
+        run: python -m compileall config.py main.py framework ai cogs
+
+      - name: Run tests
+        run: python -m pytest tests/ -v --tb=short
