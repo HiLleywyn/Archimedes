@@ -25,6 +25,7 @@ COGS: tuple[str, ...] = (
     "cogs.archimedes",
     "cogs.ai_admin",
     "cogs.sidecar",
+    "cogs.productivity",
 )
 
 

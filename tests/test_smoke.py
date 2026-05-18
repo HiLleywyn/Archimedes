@@ -19,7 +19,7 @@ _MODULES = [
     "ai.prompts", "ai.redis_store", "ai.traits", "ai.memory", "ai.context",
     "ai.tools", "ai.training", "ai.lua_plugins", "ai.emoji_index",
     "cogs.meta", "cogs.chat_views", "cogs.chat", "cogs.archimedes",
-    "cogs.ai_admin", "cogs.sidecar",
+    "cogs.ai_admin", "cogs.sidecar", "cogs.productivity",
 ]
 
 
@@ -100,14 +100,49 @@ async def test_cogs_load_and_register_commands() -> None:
     bot = ArchimedesBot()
     try:
         for ext in (
-            "cogs.meta", "cogs.chat", "cogs.archimedes", "cogs.ai_admin", "cogs.sidecar",
+            "cogs.meta", "cogs.chat", "cogs.archimedes", "cogs.ai_admin",
+            "cogs.sidecar", "cogs.productivity",
         ):
             await bot.load_extension(ext)
-        assert len(bot.cogs) == 5
+        assert len(bot.cogs) == 6
         assert bot.get_command("ask") is not None
         assert bot.get_command("archimedes") is not None
         assert bot.get_command("ai") is not None
+        for name in ("note", "task", "event", "group"):
+            assert bot.get_command(name) is not None
+        assert bot.get_command("task add") is not None
+        assert bot.get_command("group invite") is not None
     finally:
         for ext in list(bot.extensions):
             await bot.unload_extension(ext)
         await bot.close()
+
+
+def test_parse_when_relative_and_absolute() -> None:
+    import datetime as dt
+
+    from cogs.productivity import _parse_when
+
+    assert _parse_when("") is None
+    assert _parse_when("nonsense") is None
+
+    soon = _parse_when("in 2h")
+    assert soon is not None and soon.tzinfo is not None
+    delta = soon - dt.datetime.now(dt.timezone.utc)
+    assert 1.9 * 3600 < delta.total_seconds() < 2.1 * 3600
+
+    absolute = _parse_when("2026-06-01 14:30")
+    assert absolute == dt.datetime(2026, 6, 1, 14, 30, tzinfo=dt.timezone.utc)
+
+
+def test_split_sigils_peels_group_and_list() -> None:
+    from cogs.productivity import _split_sigils
+
+    group_id, list_name, text = _split_sigils("#5 ~shopping buy milk")
+    assert group_id == 5
+    assert list_name == "shopping"
+    assert text == "buy milk"
+
+    group_id, list_name, text = _split_sigils("just a plain note")
+    assert group_id is None and list_name is None
+    assert text == "just a plain note"
