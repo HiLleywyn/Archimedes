@@ -107,7 +107,8 @@ async def _ingest_signal(
         "VALUES ($1,$2,$3,$4,1,NOW()) "
         "ON CONFLICT (user_id, guild_id, trait) DO UPDATE SET "
         "weight = ai_user_traits.weight "
-        "  * exp(-$5 * EXTRACT(EPOCH FROM (NOW() - ai_user_traits.last_observed_at))) "
+        "  * exp(-$5::double precision "
+        "        * EXTRACT(EPOCH FROM (NOW() - ai_user_traits.last_observed_at))) "
         "  + $4, "
         "sample_size = ai_user_traits.sample_size + 1, "
         "last_observed_at = NOW()",
@@ -169,7 +170,8 @@ async def get_traits(db, user_id: int, guild_id: int) -> list[dict]:
     """Return decayed traits with confidence, strongest first."""
     rows = await db.fetch_all(
         "SELECT trait, "
-        "weight * exp(-$3 * EXTRACT(EPOCH FROM (NOW() - last_observed_at))) AS weight, "
+        "weight * exp(-$3::double precision "
+        "           * EXTRACT(EPOCH FROM (NOW() - last_observed_at))) AS weight, "
         "sample_size, "
         "EXTRACT(EPOCH FROM (NOW() - last_observed_at)) AS age "
         "FROM ai_user_traits WHERE user_id=$1 AND guild_id=$2",
@@ -205,6 +207,7 @@ async def prune_traits(db, user_id: int, guild_id: int) -> None:
     """Drop traits that have decayed below the noise floor."""
     await db.execute(
         "DELETE FROM ai_user_traits WHERE user_id=$1 AND guild_id=$2 AND "
-        "weight * exp(-$3 * EXTRACT(EPOCH FROM (NOW() - last_observed_at))) < 0.05",
+        "weight * exp(-$3::double precision "
+        "           * EXTRACT(EPOCH FROM (NOW() - last_observed_at))) < 0.05",
         int(user_id), int(guild_id), _LAMBDA,
     )
