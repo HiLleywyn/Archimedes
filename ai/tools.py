@@ -350,7 +350,8 @@ def build_default_registry() -> ToolRegistry:
         "use this instead of picking items by eye. Optionally sorts by an "
         "object field first.",
         {"type": "object", "properties": {
-            "items": {"type": "array", "description": "The list to slice."},
+            "items": {"type": "array", "items": {},
+                      "description": "The list to slice."},
             "n": {"type": "integer", "description": "How many items to keep."},
             "key": {"type": "string",
                     "description": "Optional object field to sort by first."},
@@ -365,7 +366,8 @@ def build_default_registry() -> ToolRegistry:
         "Keep only the named fields on each object of a list, dropping every "
         "other field. Deterministic: use this to trim wide rows.",
         {"type": "object", "properties": {
-            "items": {"type": "array", "description": "The list of objects."},
+            "items": {"type": "array", "items": {"type": "object"},
+                      "description": "The list of objects."},
             "fields": {"type": "array", "items": {"type": "string"},
                        "description": "The field names to keep."},
         }, "required": ["items", "fields"]},
@@ -377,7 +379,8 @@ def build_default_registry() -> ToolRegistry:
         "Reduce a list of numbers to one metric. Deterministic: use this "
         "instead of doing arithmetic in your head.",
         {"type": "object", "properties": {
-            "items": {"type": "array", "description": "The list to reduce."},
+            "items": {"type": "array", "items": {},
+                      "description": "The list to reduce."},
             "field": {"type": "string",
                       "description": "Optional object field to read the number from."},
             "op": {"type": "string",

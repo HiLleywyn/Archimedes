@@ -72,6 +72,28 @@ def test_tool_registry_is_generic_only() -> None:
     assert len(reg.as_openai_tools()) == 7
 
 
+def test_tool_schemas_declare_array_item_types() -> None:
+    """Every array-typed tool parameter must declare an `items` schema.
+
+    OpenAI-compatible providers reject a function schema with a typeless
+    array, which fails the chat request before the model is ever reached.
+    """
+    from ai.tools import build_default_registry
+
+    def check(schema, path: str) -> None:
+        if not isinstance(schema, dict):
+            return
+        if schema.get("type") == "array":
+            assert "items" in schema, f"array at {path} is missing `items`"
+        for key, sub in (schema.get("properties") or {}).items():
+            check(sub, f"{path}.{key}")
+        if isinstance(schema.get("items"), dict):
+            check(schema["items"], f"{path}.items")
+
+    for spec in build_default_registry().all():
+        check(spec.parameters, spec.name)
+
+
 def test_tool_registry_unregister() -> None:
     from ai.tools import RISK_SAFE, ToolRegistry, ToolSpec
 

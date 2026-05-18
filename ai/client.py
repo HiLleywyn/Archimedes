@@ -168,6 +168,8 @@ async def stream_completion(
             ) as resp:
                 if resp.status != 200:
                     body = await resp.text()
+                    log.warning("completion stream http %s: %s",
+                                resp.status, body[:300])
                     yield {"type": "error", "error": f"http_{resp.status}: {body[:200]}"}
                     return
                 async for raw in resp.content:
