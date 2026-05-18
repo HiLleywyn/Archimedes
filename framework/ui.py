@@ -124,20 +124,28 @@ class Paginator(discord.ui.View):
 
 
 class _CategorySelect(discord.ui.Select):
-    def __init__(self, parent: "CategoryPaginator") -> None:
-        self.parent = parent
-        options = [
-            discord.SelectOption(label=clip(label, 100), value=str(i))
-            for i, label in enumerate(parent.labels[:25])
+    def __init__(self, pager: "CategoryPaginator") -> None:
+        # Not ``self.parent``: discord.ui.Item reserves ``parent``.
+        self._pager = pager
+        super().__init__(placeholder="Pick a section", row=0)
+        self.refresh()
+
+    def refresh(self) -> None:
+        """Rebuild the options so the active category shows as selected."""
+        self.options = [
+            discord.SelectOption(
+                label=clip(label, 100), value=str(i),
+                default=(i == self._pager.cat_index),
+            )
+            for i, label in enumerate(self._pager.labels[:25])
         ]
-        super().__init__(placeholder="Pick a section", options=options, row=0)
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        self.parent.cat_index = int(self.values[0])
-        self.parent.page_index = 0
-        self.parent._sync()
+        self._pager.cat_index = int(self.values[0])
+        self._pager.page_index = 0
+        self._pager._sync()
         await interaction.response.edit_message(
-            embed=self.parent._current(), view=self.parent,
+            embed=self._pager._current(), view=self._pager,
         )
 
 
@@ -152,8 +160,10 @@ class CategoryPaginator(discord.ui.View):
         self.author_id = author_id
         self.cat_index = 0
         self.page_index = 0
+        self._select: _CategorySelect | None = None
         if len(self.labels) > 1:
-            self.add_item(_CategorySelect(self))
+            self._select = _CategorySelect(self)
+            self.add_item(self._select)
         self._sync()
 
     def _pages(self) -> list[discord.Embed]:
@@ -168,6 +178,8 @@ class CategoryPaginator(discord.ui.View):
         single = len(pages) <= 1
         self.prev_btn.disabled = single or self.page_index == 0
         self.next_btn.disabled = single or self.page_index >= len(pages) - 1
+        if self._select is not None:
+            self._select.refresh()
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if self.author_id is not None and interaction.user.id != self.author_id:
@@ -198,4 +210,18 @@ class CategoryPaginator(discord.ui.View):
             embed=view._current(),
             view=view if needs_view else None,
             mention_author=False,
+        )
+
+    @classmethod
+    async def respond(
+        cls, interaction: discord.Interaction,
+        categories: dict[str, list[discord.Embed]], *, ephemeral: bool = True,
+    ) -> None:
+        """Send the paginator as the reply to a slash-command interaction."""
+        view = cls(categories, author_id=interaction.user.id)
+        needs_view = len(view.labels) > 1 or len(view._pages()) > 1
+        await interaction.response.send_message(
+            embed=view._current(),
+            view=view if needs_view else None,
+            ephemeral=ephemeral,
         )

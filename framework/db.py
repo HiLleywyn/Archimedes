@@ -326,7 +326,7 @@ class Database:
         return await self.fetch_all(
             "SELECT *, EXTRACT(EPOCH FROM saved_at) AS saved_at "
             "FROM archimedes_saved_messages WHERE user_id=$1 AND guild_id=$2 "
-            "ORDER BY saved_at ASC",
+            "ORDER BY archimedes_saved_messages.saved_at ASC",
             int(user_id), int(guild_id),
         )
 
