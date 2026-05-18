@@ -512,6 +512,46 @@ class Database:
             )
         return _rowcount(status)
 
+    # ── Lua plugins: the namespaced key/value store ───────────────────────────
+    async def plugin_kv_get(self, namespace: str, key: str):
+        """Return the value stored at one key, or ``None`` if it is unset."""
+        row = await self.fetch_one(
+            "SELECT value FROM plugin_kv WHERE namespace=$1 AND key=$2",
+            str(namespace), str(key),
+        )
+        return _kv_value(row)
+
+    async def plugin_kv_set(self, namespace: str, key: str, value) -> None:
+        """Upsert one key. ``value`` may be any JSON-serialisable value."""
+        await self.execute(
+            "INSERT INTO plugin_kv (namespace, key, value) "
+            "VALUES ($1,$2,$3::jsonb) "
+            "ON CONFLICT (namespace, key) "
+            "DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()",
+            str(namespace), str(key), json.dumps(value, default=str),
+        )
+
+    async def plugin_kv_delete(self, namespace: str, key: str) -> bool:
+        status = await self.execute(
+            "DELETE FROM plugin_kv WHERE namespace=$1 AND key=$2",
+            str(namespace), str(key),
+        )
+        return _rowcount(status) > 0
+
+    async def plugin_kv_keys(self, namespace: str) -> list[str]:
+        rows = await self.fetch_all(
+            "SELECT key FROM plugin_kv WHERE namespace=$1 ORDER BY key ASC",
+            str(namespace),
+        )
+        return [str(r["key"]) for r in rows]
+
+    async def plugin_kv_clear(self, namespace: str) -> int:
+        """Drop every key in a namespace, returning the count removed."""
+        status = await self.execute(
+            "DELETE FROM plugin_kv WHERE namespace=$1", str(namespace),
+        )
+        return _rowcount(status)
+
 
 def _rowcount(status: str) -> int:
     """Parse the affected-row count out of an asyncpg status string."""
@@ -546,3 +586,16 @@ def _store_row(row: dict | None) -> dict | None:
     out = dict(doc)
     out["id"] = int(row["id"])
     return out
+
+
+def _kv_value(row: dict | None):
+    """Decode a plugin_kv row's value, which asyncpg may hand back as text."""
+    if row is None:
+        return None
+    value = row.get("value")
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (ValueError, TypeError):
+            return None
+    return value

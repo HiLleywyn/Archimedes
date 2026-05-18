@@ -12,9 +12,12 @@ A plugin file ``return``s one table::
         category    = "Productivity",
         storage     = "productivity", -- optional document-store namespace
       },
-      commands = { <command>, ... },  -- prefix commands (see api.py)
-      tools    = { <tool>, ... },     -- agent tools (see api.py)
-      loops    = { <loop>, ... },     -- background jobs (see api.py)
+      commands  = { <command>, ... }, -- prefix commands (see api.py)
+      tools     = { <tool>, ... },    -- agent tools (see api.py)
+      loops     = { <loop>, ... },    -- background jobs (see api.py)
+      events    = { <name> = fn },    -- gateway + cross-plugin hooks
+      on_load   = function() ... end, -- optional, run when the plugin loads
+      on_unload = function() ... end, -- optional, run before it unloads
     }
 
 :func:`compile_plugin` runs that file in a fresh, sandboxed runtime and returns
@@ -28,6 +31,7 @@ import re
 from dataclasses import dataclass, field
 
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,38}$")
+_EVENT_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 # Stripped from every plugin runtime before the plugin file runs. Plugins get
 # string / table / math / os.time and friends, never a way off the sandbox.
@@ -88,6 +92,11 @@ class LuaPlugin:
     commands: list = field(default_factory=list)
     tools: list = field(default_factory=list)
     loops: list = field(default_factory=list)
+    # event name -> Lua handler. A name in EVENT_NAMES is a Discord gateway
+    # hook; any other name is a custom event delivered through arch.emit.
+    events: dict = field(default_factory=dict)
+    on_load: object | None = None    # a Lua function, or None
+    on_unload: object | None = None  # a Lua function, or None
 
 
 # ── Lua <-> Python marshalling ────────────────────────────────────────────────
@@ -221,9 +230,14 @@ def compile_plugin(source: str, *, expected_id: str | None = None) -> LuaPlugin:
     tools = _as_list(lua_to_py(table["tools"]), "tools")
     loops = _as_list(lua_to_py(table["loops"]), "loops")
     _validate_commands(commands)
+
+    events = _as_event_map(lua_to_py(table["events"]))
+    on_load = _require_callable(table["on_load"], "on_load")
+    on_unload = _require_callable(table["on_unload"], "on_unload")
     return LuaPlugin(
         manifest=manifest, runtime=runtime,
         commands=commands, tools=tools, loops=loops,
+        events=events, on_load=on_load, on_unload=on_unload,
     )
 
 
@@ -232,6 +246,34 @@ def _as_list(value, label: str) -> list:
         return []
     if not isinstance(value, list):
         raise PluginError(f"`{label}` must be an array of tables")
+    return value
+
+
+def _as_event_map(value) -> dict:
+    """Validate the ``events`` table into a ``{name: lua_function}`` dict."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise PluginError("`events` must be a table of name = function")
+    events: dict = {}
+    for name, handler in value.items():
+        key = str(name)
+        if not _EVENT_NAME_RE.match(key):
+            raise PluginError(
+                f"event name {key!r} must be lower-case letters, digits and _"
+            )
+        if _lua_type(handler) != "function":
+            raise PluginError(f"event `{key}` must be a function")
+        events[key] = handler
+    return events
+
+
+def _require_callable(value, label: str):
+    """Return ``value`` if it is a Lua function or absent, else raise."""
+    if value is None:
+        return None
+    if _lua_type(value) != "function":
+        raise PluginError(f"`{label}` must be a function")
     return value
 
 

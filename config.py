@@ -98,6 +98,18 @@ class Config:
     PLUGIN_REGISTRY_REF: str = _env("PLUGIN_REGISTRY_REF", "main")
     GITHUB_TOKEN: str = _env("GITHUB_TOKEN")
 
+    # ── Plugin HTTP client ────────────────────────────────────────────────────
+    # The outbound HTTP surface handed to Lua plugins as `arch.http`. Every
+    # request is SSRF-guarded; these caps are hard ceilings a per-call `opts`
+    # table may lower but never raise.
+    PLUGIN_HTTP_ENABLED: bool = _env_bool("PLUGIN_HTTP_ENABLED", True)
+    PLUGIN_HTTP_TIMEOUT_S: int = _env_int("PLUGIN_HTTP_TIMEOUT_S", 10)
+    PLUGIN_HTTP_MAX_BYTES: int = _env_int("PLUGIN_HTTP_MAX_BYTES", 1048576)
+    PLUGIN_HTTP_MAX_REDIRECTS: int = _env_int("PLUGIN_HTTP_MAX_REDIRECTS", 3)
+    # An escape hatch for self-hosted operators who deliberately want plugins
+    # to reach a private network. Off by default -- leave it off.
+    PLUGIN_HTTP_ALLOW_PRIVATE: bool = _env_bool("PLUGIN_HTTP_ALLOW_PRIVATE", False)
+
     @classmethod
     def validate(cls) -> list[str]:
         """Return a list of fatal configuration problems (empty when OK)."""

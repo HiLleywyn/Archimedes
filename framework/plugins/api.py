@@ -23,7 +23,9 @@ import re
 import discord
 
 from ai.tools import RISK_SAFE, ToolSpec
+from config import Config
 from framework.embed import card
+from framework.plugins import net, util
 from framework.plugins.runtime import lua_to_py, py_to_lua
 from framework.ui import (
     C_AMBER, C_BLURPLE, C_ERROR, C_GOLD, C_INFO, C_NAVY, C_NEUTRAL, C_PINK,
@@ -143,23 +145,31 @@ def card_to_embed(spec) -> discord.Embed:
 class LuaApi:
     """Wires one compiled plugin to the database, the bot and the event loop."""
 
-    def __init__(self, plugin, *, db, bot, loop: asyncio.AbstractEventLoop) -> None:
+    def __init__(
+        self, plugin, *, db, bot, loop: asyncio.AbstractEventLoop,
+        manager=None,
+    ) -> None:
         self._plugin = plugin
         self._runtime = plugin.runtime
         self._db = db
         self._bot = bot
         self._loop = loop
+        self._manager = manager
         self._namespace = plugin.manifest.storage
         self._lock = asyncio.Lock()
         self._store_table = None
+        self._kv_table = None
 
     # ── activation: install the `arch` global ────────────────────────────────
     def activate(self) -> None:
         """Build the ``arch`` global and bind it in the plugin's runtime."""
         store = self._build_store()
         self._store_table = store
+        kv = self._build_kv()
+        self._kv_table = kv
         arch = {
             "store": store,
+            "kv": kv,
             "colors": dict(COLORS),
             "now": lambda: int(dt.datetime.now(dt.timezone.utc).timestamp()),
             "parse_time": lambda text: parse_time_to_epoch(_s(text)),
@@ -170,8 +180,23 @@ class LuaApi:
             "user_name": self._user_name,
             "log": lambda msg: log.info("[plugin:%s] %s",
                                         self._plugin.manifest.id, _s(msg)),
+            "json": {"encode": self._json_encode, "decode": self._json_decode},
+            "base64": {"encode": util.b64_encode, "decode": util.b64_decode},
+            "hash": util.hash_text,
+            "uuid": util.make_uuid,
+            "random": util.rand,
+            "http": self._build_http(),
+            "discord": self._build_discord(),
+            "emit": self._emit,
         }
         self._runtime.globals()["arch"] = py_to_lua(self._runtime, arch)
+
+    # ── arch.json ─────────────────────────────────────────────────────────────
+    def _json_encode(self, value):
+        return util.json_encode(lua_to_py(value))
+
+    def _json_decode(self, text):
+        return py_to_lua(self._runtime, util.json_decode(_s(text)))
 
     def _build_store(self):
         ns = self._namespace
@@ -207,6 +232,263 @@ class LuaApi:
             "put": put, "get": get, "update": update,
             "delete": delete, "query": query, "all": all_,
         })
+
+    # ── arch.kv: the namespaced key/value store ───────────────────────────────
+    def _build_kv(self):
+        ns = self._namespace
+
+        def get(key):
+            value = self._bridge(self._db.plugin_kv_get(ns, _s(key)))
+            return py_to_lua(self._runtime, value)
+
+        def set_(key, value):
+            self._bridge(self._db.plugin_kv_set(ns, _s(key), lua_to_py(value)))
+            return True
+
+        def delete(key):
+            return self._bridge(self._db.plugin_kv_delete(ns, _s(key)))
+
+        def keys():
+            return py_to_lua(
+                self._runtime, self._bridge(self._db.plugin_kv_keys(ns)))
+
+        def clear():
+            return self._bridge(self._db.plugin_kv_clear(ns))
+
+        return py_to_lua(self._runtime, {
+            "get": get, "set": set_, "delete": delete,
+            "keys": keys, "clear": clear,
+        })
+
+    # ── arch.http: the SSRF-guarded outbound HTTP client ──────────────────────
+    def _build_http(self):
+        def get(url, opts=None):
+            return self._http_call("GET", _s(url), opts)
+
+        def post(url, opts=None):
+            return self._http_call("POST", _s(url), opts)
+
+        def request(method, url, opts=None):
+            return self._http_call(_s(method), _s(url), opts)
+
+        return py_to_lua(self._runtime, {
+            "get": get, "post": post, "request": request,
+        })
+
+    def _http_call(self, method: str, url: str, opts):
+        """Run one plugin HTTP request. Marshals Lua args in this worker."""
+        if not Config.PLUGIN_HTTP_ENABLED:
+            return py_to_lua(self._runtime, {
+                "ok": False, "status": 0, "body": "", "json": None,
+                "headers": {}, "error": "plugin HTTP is disabled",
+            })
+        parsed = lua_to_py(opts) if opts is not None else {}
+        if not isinstance(parsed, dict):
+            parsed = {}
+        raw_headers = parsed.get("headers")
+        headers = raw_headers if isinstance(raw_headers, dict) else {}
+        result = self._bridge(net.fetch(
+            method, url,
+            headers=headers,
+            body=parsed.get("body"),
+            json_body=parsed.get("json"),
+            timeout=_clamp(parsed.get("timeout"), Config.PLUGIN_HTTP_TIMEOUT_S),
+            max_bytes=int(_clamp(parsed.get("max_bytes"),
+                                 Config.PLUGIN_HTTP_MAX_BYTES)),
+            max_redirects=int(_clamp(parsed.get("max_redirects"),
+                                     Config.PLUGIN_HTTP_MAX_REDIRECTS)),
+        ))
+        return py_to_lua(self._runtime, result)
+
+    # ── arch.discord: bridged Discord read/write helpers ──────────────────────
+    def _build_discord(self):
+        return py_to_lua(self._runtime, {
+            "send": self._discord_send,
+            "react": self._discord_react,
+            "history": self._discord_history,
+            "channel": self._discord_channel,
+            "guild": self._discord_guild,
+            "member": self._discord_member,
+            "roles": self._discord_roles,
+        })
+
+    def _discord_send(self, channel_id, spec) -> bool:
+        embed = card_to_embed(lua_to_py(spec))
+        return self._bridge(self._do_discord_send(channel_id, embed))
+
+    async def _do_discord_send(self, channel_id, embed: discord.Embed) -> bool:
+        channel = await self._resolve_channel(channel_id)
+        if channel is None:
+            return False
+        try:
+            await channel.send(embed=embed)
+        except discord.HTTPException:
+            return False
+        return True
+
+    def _discord_react(self, channel_id, message_id, emoji) -> bool:
+        return self._bridge(
+            self._do_discord_react(channel_id, message_id, _s(emoji)))
+
+    async def _do_discord_react(self, channel_id, message_id, emoji) -> bool:
+        channel = await self._resolve_channel(channel_id)
+        if channel is None:
+            return False
+        try:
+            message = await channel.fetch_message(int(message_id))
+            await message.add_reaction(emoji)
+        except (discord.HTTPException, TypeError, ValueError):
+            return False
+        return True
+
+    def _discord_history(self, channel_id, limit=None):
+        rows = self._bridge(self._do_discord_history(channel_id, limit))
+        return py_to_lua(self._runtime, rows)
+
+    async def _do_discord_history(self, channel_id, limit) -> list:
+        channel = await self._resolve_channel(channel_id)
+        if channel is None or not hasattr(channel, "history"):
+            return []
+        try:
+            count = int(limit)
+        except (TypeError, ValueError):
+            count = 20
+        count = max(1, min(count, 100))
+        out: list[dict] = []
+        try:
+            async for message in channel.history(limit=count):
+                out.append({
+                    "id": str(message.id),
+                    "author_id": str(message.author.id),
+                    "author_name": message.author.display_name,
+                    "content": message.content or "",
+                    "created_at": int(message.created_at.timestamp()),
+                    "bot": bool(message.author.bot),
+                })
+        except discord.HTTPException:
+            return []
+        return out
+
+    def _discord_channel(self, channel_id):
+        info = self._bridge(self._do_discord_channel(channel_id))
+        return py_to_lua(self._runtime, info) if info else None
+
+    async def _do_discord_channel(self, channel_id):
+        channel = await self._resolve_channel(channel_id)
+        if channel is None:
+            return None
+        guild = getattr(channel, "guild", None)
+        return {
+            "id": str(channel.id),
+            "name": getattr(channel, "name", "") or "",
+            "type": str(getattr(channel, "type", "")),
+            "guild_id": str(guild.id) if guild else "0",
+        }
+
+    def _discord_guild(self, guild_id):
+        info = self._bridge(self._do_discord_guild(guild_id))
+        return py_to_lua(self._runtime, info) if info else None
+
+    async def _do_discord_guild(self, guild_id):
+        try:
+            gid = int(guild_id)
+        except (TypeError, ValueError):
+            return None
+        guild = self._bot.get_guild(gid)
+        if guild is None:
+            return None
+        return {
+            "id": str(guild.id),
+            "name": guild.name,
+            "member_count": guild.member_count or 0,
+            "owner_id": str(guild.owner_id) if guild.owner_id else "0",
+        }
+
+    def _discord_member(self, guild_id, user_id):
+        info = self._bridge(self._do_discord_member(guild_id, user_id))
+        return py_to_lua(self._runtime, info) if info else None
+
+    async def _do_discord_member(self, guild_id, user_id):
+        try:
+            gid, uid = int(guild_id), int(user_id)
+        except (TypeError, ValueError):
+            return None
+        guild = self._bot.get_guild(gid)
+        if guild is None:
+            return None
+        member = guild.get_member(uid)
+        if member is None:
+            try:
+                member = await guild.fetch_member(uid)
+            except discord.HTTPException:
+                return None
+        return {
+            "id": str(member.id),
+            "name": member.display_name,
+            "roles": [str(role.id) for role in member.roles],
+            "joined_at": (int(member.joined_at.timestamp())
+                          if member.joined_at else None),
+            "bot": bool(member.bot),
+        }
+
+    def _discord_roles(self, guild_id):
+        rows = self._bridge(self._do_discord_roles(guild_id))
+        return py_to_lua(self._runtime, rows)
+
+    async def _do_discord_roles(self, guild_id) -> list:
+        try:
+            gid = int(guild_id)
+        except (TypeError, ValueError):
+            return []
+        guild = self._bot.get_guild(gid)
+        if guild is None:
+            return []
+        return [{
+            "id": str(role.id),
+            "name": role.name,
+            "color": role.color.value,
+            "position": role.position,
+        } for role in guild.roles]
+
+    async def _resolve_channel(self, channel_id):
+        """Look up a channel by id, fetching it from the API if uncached."""
+        try:
+            cid = int(channel_id)
+        except (TypeError, ValueError):
+            return None
+        channel = self._bot.get_channel(cid)
+        if channel is None:
+            try:
+                channel = await self._bot.fetch_channel(cid)
+            except discord.HTTPException:
+                return None
+        return channel
+
+    # ── arch.emit: the cross-plugin event bus ─────────────────────────────────
+    def _emit(self, event_name, payload=None) -> int:
+        name = _s(event_name)
+        data = lua_to_py(payload) if payload is not None else {}
+        return self._bridge(self._do_emit(name, data))
+
+    async def _do_emit(self, name: str, data) -> int:
+        if self._manager is None:
+            return 0
+        return await self._manager.emit(
+            name, data, source=self._plugin.manifest.id)
+
+    # ── shared worker-thread entry point ──────────────────────────────────────
+    async def run_in_worker(self, fn, *args):
+        """Run a callable on a worker thread under this plugin's lock.
+
+        Used for event handlers and the on_load / on_unload lifecycle hooks so
+        every Lua entry point serialises against the one runtime uniformly.
+        """
+        async with self._lock:
+            return await asyncio.to_thread(fn, *args)
+
+    def invoke_event(self, handler, payload) -> None:
+        """Call one Lua event handler with a payload table (worker side)."""
+        handler(py_to_lua(self._runtime, payload or {}))
 
     # ── event-loop bridge ─────────────────────────────────────────────────────
     def _bridge(self, coro):
@@ -409,21 +691,44 @@ class LuaApi:
         return specs
 
     def _make_tool_handler(self, lua_handler):
-        async def handler(args: dict, _tool_ctx) -> dict:
+        async def handler(args: dict, tool_ctx) -> dict:
             async with self._lock:
                 result = await asyncio.to_thread(
-                    self._invoke_tool, lua_handler, args,
+                    self._invoke_tool, lua_handler, args, tool_ctx,
                 )
             if isinstance(result, dict):
                 return result
-            if isinstance(result, list):
-                return {"result": result}
             return {"result": result}
 
         return handler
 
-    def _invoke_tool(self, lua_handler, args: dict):
-        return lua_to_py(lua_handler(py_to_lua(self._runtime, args or {})))
+    def _invoke_tool(self, lua_handler, args: dict, tool_ctx):
+        """Call a Lua tool handler with ``(args, ctx)`` (worker side)."""
+        ctx_table = self._build_tool_ctx(tool_ctx)
+        return lua_to_py(lua_handler(
+            py_to_lua(self._runtime, args or {}), ctx_table))
+
+    def _build_tool_ctx(self, tool_ctx):
+        """The per-call ``ctx`` table a Lua agent-tool handler receives.
+
+        A tool has no Discord command context, so ``ctx.reply`` posts to the
+        channel the conversation is happening in (``tool_ctx.channel_id``).
+        """
+        guild_id = getattr(tool_ctx, "guild_id", 0) or 0
+        channel_id = getattr(tool_ctx, "channel_id", 0) or 0
+        data = {
+            "user_id": str(getattr(tool_ctx, "user_id", 0) or 0),
+            "guild_id": str(guild_id),
+            "channel_id": str(channel_id),
+            "is_dm": not guild_id,
+            "user_name": self._user_name,
+            "store": self._store_table,
+            "kv": self._kv_table,
+            "dm": self._dm,
+            "reply": lambda spec: self._bridge(self._do_discord_send(
+                channel_id, card_to_embed(lua_to_py(spec)))),
+        }
+        return py_to_lua(self._runtime, data)
 
     # ── background loops ──────────────────────────────────────────────────────
     def make_loop_runner(self, loop_def: dict):
@@ -559,6 +864,21 @@ def _int(value) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
+def _clamp(value, cap: float) -> float:
+    """A plugin-supplied numeric option, bounded to ``[0, cap]``.
+
+    A missing or unparseable value falls back to the cap, so a plugin gets the
+    operator default unless it deliberately asks for something smaller.
+    """
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return cap
+    if num < 0:
+        return cap
+    return min(num, cap)
 
 
 def _opt_private(opts) -> bool:

@@ -22,6 +22,9 @@ from dataclasses import dataclass, field
 
 from config import Config
 from framework.plugins.api import LuaApi, build_commands, command_help_embed
+from framework.plugins.events import (
+    EVENT_NAMES, PluginEventBus, PluginEventDispatcher,
+)
 from framework.plugins.registry import PluginRegistry, RegistryError
 from framework.plugins.runtime import (
     LuaPlugin, PluginError, compile_plugin, lupa_available,
@@ -45,6 +48,7 @@ class LoadedPlugin:
     command_names: list[str] = field(default_factory=list)
     tool_names: list[str] = field(default_factory=list)
     loop_tasks: list[asyncio.Task] = field(default_factory=list)
+    event_names: list[str] = field(default_factory=list)
 
 
 class PluginManager:
@@ -62,6 +66,15 @@ class PluginManager:
         self._errors: dict[str, str] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
         self.available = lupa_available()
+        # The cross-plugin event bus, plus the gateway-event handler map
+        # (plugin id -> {event name -> Lua handler}). The dispatcher cog is
+        # added once, in startup().
+        self.event_bus = PluginEventBus()
+        self._event_handlers: dict[str, dict[str, object]] = {}
+        self._dispatcher: PluginEventDispatcher | None = None
+        # Live event-handler tasks. Held so the loop cannot garbage-collect a
+        # fire-and-forget task before it finishes.
+        self._event_tasks: set[asyncio.Task] = set()
 
     # ── boot ──────────────────────────────────────────────────────────────────
     async def startup(self) -> None:
@@ -73,6 +86,12 @@ class PluginManager:
             log.warning("lupa is not installed -- Lua plugins are unavailable")
             return
         self._loop = asyncio.get_running_loop()
+        # One dispatcher cog feeds Discord gateway events to every plugin.
+        # Added once and kept across reloads; discord.py fans events to it
+        # independently of the chat and sidecar cogs.
+        if self._dispatcher is None:
+            self._dispatcher = PluginEventDispatcher(self.bot, self)
+            await self.bot.add_cog(self._dispatcher)
         await self._sync_bundled()
         rows = await self.db.list_installed_plugins()
         loaded = 0
@@ -145,9 +164,12 @@ class PluginManager:
             log.warning("plugin %s failed to compile: %s", plugin_id, exc)
             return False
 
-        api = LuaApi(plugin, db=self.db, bot=self.bot, loop=self._loop)
+        api = LuaApi(plugin, db=self.db, bot=self.bot, loop=self._loop,
+                     manager=self)
         try:
             api.activate()
+            if plugin.on_load is not None:
+                await api.run_in_worker(plugin.on_load)
             commands = build_commands(api, plugin)
             self._claim_command_space(plugin_id, commands)
         except Exception as exc:  # noqa: BLE001
@@ -182,14 +204,32 @@ class PluginManager:
             if runner is not None:
                 loop_tasks.append(asyncio.create_task(runner()))
 
+        event_names = self._register_events(plugin_id, plugin)
+
         self._loaded[plugin_id] = LoadedPlugin(
             plugin=plugin, api=api, command_names=added,
             tool_names=tool_names, loop_tasks=loop_tasks,
+            event_names=event_names,
         )
         self._errors.pop(plugin_id, None)
-        log.info("plugin loaded: %s v%s (%d command(s), %d tool(s))",
-                 plugin_id, plugin.manifest.version, len(added), len(tool_names))
+        log.info("plugin loaded: %s v%s (%d command(s), %d tool(s), "
+                 "%d event(s))", plugin_id, plugin.manifest.version,
+                 len(added), len(tool_names), len(event_names))
         return True
+
+    def _register_events(self, plugin_id: str, plugin: LuaPlugin) -> list[str]:
+        """Wire a plugin's ``events`` table into the dispatcher and the bus."""
+        gateway: dict[str, object] = {}
+        names: list[str] = []
+        for name, handler in plugin.events.items():
+            if name in EVENT_NAMES:
+                gateway[name] = handler
+            else:
+                self.event_bus.subscribe(plugin_id, name, handler)
+            names.append(name)
+        if gateway:
+            self._event_handlers[plugin_id] = gateway
+        return names
 
     def _claim_command_space(self, plugin_id: str, commands: list) -> None:
         """Raise if any command name or alias is already taken."""
@@ -202,10 +242,19 @@ class PluginManager:
                     )
 
     async def _unload(self, plugin_id: str) -> None:
-        """Tear a plugin's commands, tools and loops back out of the bot."""
+        """Tear a plugin's commands, tools, loops and events out of the bot."""
         loaded = self._loaded.pop(plugin_id, None)
         if loaded is None:
             return
+        # on_unload runs while the plugin is still live so the hook can still
+        # reach the document store, HTTP client and the rest of `arch`.
+        if loaded.plugin.on_unload is not None:
+            try:
+                await loaded.api.run_in_worker(loaded.plugin.on_unload)
+            except Exception:  # noqa: BLE001
+                log.exception("plugin %s on_unload failed", plugin_id)
+        self._event_handlers.pop(plugin_id, None)
+        self.event_bus.unsubscribe_plugin(plugin_id)
         for name in loaded.command_names:
             self.bot.remove_command(name)
         if self.bot.tools is not None:
@@ -214,6 +263,51 @@ class PluginManager:
         for task in loaded.loop_tasks:
             task.cancel()
         log.info("plugin unloaded: %s", plugin_id)
+
+    # ── event dispatch ────────────────────────────────────────────────────────
+    async def dispatch_event(self, event_name: str, payload: dict) -> None:
+        """Fan one Discord gateway event out to every subscribed plugin."""
+        for plugin_id, handlers in list(self._event_handlers.items()):
+            handler = handlers.get(event_name)
+            if handler is None:
+                continue
+            loaded = self._loaded.get(plugin_id)
+            if loaded is None:
+                continue
+            self._spawn_event(
+                self._run_event(plugin_id, loaded.api, handler, payload))
+
+    async def emit(self, event_name: str, payload, *, source: str = "") -> int:
+        """Deliver a custom ``arch.emit`` event to its subscribers.
+
+        Returns the number of plugins the event reached. The payload is
+        tagged with ``_event`` and ``_from`` so a handler can tell the origin.
+        """
+        data = dict(payload) if isinstance(payload, dict) else {"value": payload}
+        data.setdefault("_event", event_name)
+        data.setdefault("_from", source)
+        count = 0
+        for plugin_id, handler in self.event_bus.subscribers(event_name):
+            loaded = self._loaded.get(plugin_id)
+            if loaded is None:
+                continue
+            self._spawn_event(
+                self._run_event(plugin_id, loaded.api, handler, data))
+            count += 1
+        return count
+
+    def _spawn_event(self, coro) -> None:
+        """Start an event-handler task and hold a reference until it ends."""
+        task = asyncio.create_task(coro)
+        self._event_tasks.add(task)
+        task.add_done_callback(self._event_tasks.discard)
+
+    async def _run_event(self, plugin_id: str, api, handler, payload) -> None:
+        """Run one plugin's event handler, isolating its failures."""
+        try:
+            await api.run_in_worker(api.invoke_event, handler, payload)
+        except Exception:  # noqa: BLE001
+            log.exception("plugin %s event handler failed", plugin_id)
 
     # ── admin operations ──────────────────────────────────────────────────────
     async def enable(self, plugin_id: str) -> str:
@@ -343,9 +437,15 @@ class PluginManager:
                 f"{len(self._errors)} failed.")
 
     async def shutdown(self) -> None:
-        """Cancel every plugin loop. Called on a graceful bot shutdown."""
+        """Unload every plugin and the dispatcher. Called on bot shutdown."""
         for pid in list(self._loaded):
             await self._unload(pid)
+        if self._dispatcher is not None:
+            try:
+                await self.bot.remove_cog(self._dispatcher.qualified_name)
+            except Exception:  # noqa: BLE001
+                pass
+            self._dispatcher = None
 
     # ── queries ───────────────────────────────────────────────────────────────
     async def list_plugins(self) -> list[dict]:

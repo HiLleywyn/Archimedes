@@ -1,8 +1,8 @@
 # Archimedes
 
 A standalone AI chat bot for Discord. Archimedes is a memory-backed conversational
-companion: mention it, reply to it, or use `.ask`, and it answers with a
-persona-driven model while learning who it is talking to.
+companion: mention it, reply to it, use `.ask`, or just message it directly,
+and it answers with a persona-driven model while learning who it is talking to.
 
 It is fully self-contained: the `.ai` and `.arch` command groups, per-user /
 per-channel / per-server context learning, the tool-calling loop and the
@@ -18,7 +18,8 @@ runs the test suite.
 ## What it does
 
 - **Conversational chat** -- replies to `@mentions`, replies to its own
-  messages, the `.ask` command, and optional ambient chime-ins.
+  messages, direct messages, the `.ask` command, and optional ambient
+  chime-ins.
 - **Streaming replies** with a live status spinner and Regenerate / Continue
   buttons.
 - **Context learning** -- it builds and refreshes a per-user memory summary, a
@@ -27,9 +28,11 @@ runs the test suite.
 - **Tool calling** -- the model can call generic, non-financial tools:
   web search, image description, and remember / recall facts.
 - **Lua plugins** -- a full plugin system. A plugin is one `.lua` file that
-  can register prefix commands, agent tools and background loops. Plugins
-  install from a GitHub marketplace, survive restarts, and are managed live
-  with `.ai plugins`.
+  can register prefix commands, agent tools, background loops and event
+  handlers, and reach out through an HTTP client, a Discord read/write API,
+  document and key/value stores, and JSON utilities. Plugins install from a
+  GitHub marketplace, survive restarts, and are managed live with
+  `.ai plugins`.
 - **Productivity** -- private notes, tasks organised into to-do lists, and
   calendar events with reminders, all delivered as bundled Lua plugins.
   Personal items stay private (answered in your DMs); groups let members
