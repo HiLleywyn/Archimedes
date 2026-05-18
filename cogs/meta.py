@@ -16,7 +16,7 @@ from config import Config
 from framework.context import ArchimedesContext
 from framework.embed import CardBuilder, card
 from framework.ui import (
-    C_BLURPLE, C_GOLD, C_INFO, C_PURPLE, C_TEAL, CategoryPaginator,
+    C_BLURPLE, C_INFO, C_PURPLE, C_TEAL, CategoryPaginator,
 )
 
 
@@ -166,217 +166,43 @@ def build_help_categories(p: str) -> dict[str, list[discord.Embed]]:
         ),
     ], "Settings")
 
-    cats["Notes (.note)"] = _render([
+    cats["Plugins"] = _render([
         card(
-            f"Notes -- {p}note",
-            color=C_INFO,
-            description=(
-                "Private notes, kept per user across every server. "
-                "Archimedes answers note commands in your DMs."
-            ),
-        )
-        .field(f"`{p}note` or `{p}note list`", "List your notes.")
-        .field(
-            f"`{p}note add <text>`",
-            f"Add a note. The first line becomes the title, the rest is the "
-            f"body.\nExample: `{p}note add Wifi -- guest network is open`",
-        )
-        .field(
-            f"`{p}note show <id>`",
-            f"Open a single note.\nExample: `{p}note show 12`",
-        )
-        .field(f"`{p}note edit <id> <text>`", "Replace a note's text.")
-        .field(f"`{p}note del <id>`", "Delete a note.")
-        .field(
-            f"`{p}note share <id> @user [edit]`",
-            f"Share a note with someone. Add `edit` to let them change it.\n"
-            f"Example: `{p}note share 12 @Sam edit`",
-        )
-        .field(
-            f"`{p}note unshare <id> @user`",
-            "Stop sharing a note with that user.",
-        )
-        .field(
-            f"`{p}note copy <id> <dest>` / `{p}note move <id> <dest>`",
-            f"Copy or move a note. Destination is `me`, an `@user`, or "
-            f"`#<groupid>`.\nExample: `{p}note copy 12 #5`",
-        )
-        .field(
-            "Target a group",
-            f"Start the text with `#<groupid>` to file the note in a group.\n"
-            f"Example: `{p}note add #5 Buy projector cable`",
-        ),
-    ], "Notes")
-
-    cats["Tasks (.task)"] = _render([
-        card(
-            f"Tasks -- {p}task  (basics)",
+            "Plugins",
             color=C_TEAL,
             description=(
-                f"Tasks organised into named lists. `{p}task`, `{p}tasks` "
-                f"and `{p}todo` all work."
+                "Most of what Archimedes does for you -- notes, tasks, "
+                "calendar events, shareable groups -- is delivered by Lua "
+                "plugins. The Notes, Tasks, Events and Groups sections of "
+                "this menu are generated live from the plugins installed "
+                "right now, so the help always matches what is loaded."
             ),
         )
         .field(
-            f"`{p}task` or `{p}task list [~list]`",
-            f"List your tasks. Add a list name to filter.\n"
-            f"Example: `{p}task list ~shopping`",
-        )
-        .field(
-            f"`{p}task add [~list] <text>`",
-            f"Add a task. `~<list>` picks a list (default `general`).\n"
-            f"Example: `{p}task add ~shopping milk and eggs`",
-        )
-        .field(
-            f"`{p}task lists`",
-            "Show every task list and how many tasks are open in each.",
-        )
-        .field(
-            f"`{p}task done <id>`",
-            f"Mark a task done.\nExample: `{p}task done 7`",
-        )
-        .field(f"`{p}task undone <id>`", "Reopen a completed task.")
-        .field(
-            "Lists and groups",
-            f"`~<name>` targets a list; `#<groupid>` targets a group.\n"
+            "Scope tokens",
+            f"`#<groupid>` at the start of an `add` / `list` argument files "
+            f"the item in a group; no `#` means your personal space.\n"
+            f"`~<list>` picks a task list (the default list is `general`).\n"
             f"Example: `{p}task add #5 ~launch ship the build`",
-        ),
-        card(
-            f"Tasks -- {p}task  (dates, reminders and sharing)",
-            color=C_TEAL,
         )
         .field(
-            f"`{p}task due <id> <when>`",
-            f"Set a due date; `clear` removes it.\n"
-            f"Example: `{p}task due 7 2026-06-01 14:30`",
-        )
-        .field(
-            f"`{p}task remind <id> <when>`",
-            f"Set a reminder; Archimedes DMs you when it falls due.\n"
-            f"Example: `{p}task remind 7 in 2h`",
+            "Private vs shared",
+            "Personal notes, tasks and events are answered in your DMs and "
+            "the command message is tidied away. Group items are shared with "
+            "every member and answered in the channel.",
         )
         .field(
             "Time formats",
             "Relative: `in 30m`, `in 2h`, `in 3d`, `in 1w`. "
-            "Absolute (UTC): `2026-06-01` or `2026-06-01 14:30`.",
-        )
-        .field(f"`{p}task edit <id> <text>`", "Replace a task's text.")
-        .field(f"`{p}task del <id>`", "Delete a task.")
-        .field(
-            f"`{p}task share <id> @user [edit]`",
-            f"Share a task, optionally with edit access. "
-            f"`{p}task unshare <id> @user` stops it.",
+            "Absolute (UTC): `2026-06-01` or `2026-06-01 14:30`. "
+            "Tasks and events can carry a reminder that DMs you when due.",
         )
         .field(
-            f"`{p}task copy <id> <dest>` / `{p}task move <id> <dest>`",
-            "Copy or move a task to `me`, an `@user`, or `#<groupid>`.",
+            "Managing plugins",
+            f"Server moderators install, update, enable and disable plugins "
+            f"with `{p}ai plugins` -- see the Staff controls section.",
         ),
-    ], "Tasks")
-
-    cats["Events (.event)"] = _render([
-        card(
-            f"Events -- {p}event",
-            color=C_GOLD,
-            description=(
-                f"Calendar events with optional reminders. `{p}event`, "
-                f"`{p}cal` and `{p}calendar` all work."
-            ),
-        )
-        .field(f"`{p}event` or `{p}event list`", "List your upcoming events.")
-        .field(
-            f"`{p}event add <when> | <title>`",
-            f"Add an event. Put the time before the `|`.\n"
-            f"Example: `{p}event add in 2d | Team sync`",
-        )
-        .field(
-            f"`{p}event show <id>`",
-            f"Open a single event.\nExample: `{p}event show 4`",
-        )
-        .field(
-            f"`{p}event when <id> <when>`",
-            f"Reschedule an event.\n"
-            f"Example: `{p}event when 4 2026-07-01 09:00`",
-        )
-        .field(
-            f"`{p}event remind <id> <when>`",
-            f"Set a reminder; `clear` removes it.\n"
-            f"Example: `{p}event remind 4 in 1h`",
-        )
-        .field(f"`{p}event edit <id> <text>`", "Replace an event's text.")
-        .field(f"`{p}event del <id>`", "Delete an event.")
-        .field(
-            f"`{p}event share <id> @user [edit]`",
-            f"Share an event. `{p}event unshare <id> @user` stops it.",
-        )
-        .field(
-            f"`{p}event copy <id> <dest>` / `{p}event move <id> <dest>`",
-            "Copy or move an event to `me`, an `@user`, or `#<groupid>`.",
-        ),
-    ], "Events")
-
-    cats["Groups (.group)"] = _render([
-        card(
-            f"Groups -- {p}group  (members)",
-            color=C_BLURPLE,
-            description=(
-                "A group is a shared space for notes, tasks and events. "
-                "Every member can see and edit the group's items, and "
-                "replies post in the channel. You can be in many groups."
-            ),
-        )
-        .field(f"`{p}group` or `{p}group list`", "List the groups you belong to.")
-        .field(
-            f"`{p}group create <name>`",
-            f"Create a group in this server.\n"
-            f"Example: `{p}group create Launch crew`",
-        )
-        .field(
-            f"`{p}group show <id>`",
-            "Show a group's members and how many items it holds.",
-        )
-        .field(
-            f"`{p}group invite <id> @user`",
-            f"Invite someone to a group you own.\n"
-            f"Example: `{p}group invite 5 @Sam`",
-        )
-        .field(f"`{p}group invites`", "List group invitations waiting for you.")
-        .field(
-            f"`{p}group join <id>` / `{p}group decline <id>`",
-            "Accept or decline a pending invitation.",
-        )
-        .field(f"`{p}group leave <id>`", "Leave a group you are in.")
-        .field(
-            f"`{p}group kick <id> @user`",
-            "Remove a member from a group you own.",
-        ),
-        card(
-            f"Groups -- {p}group  (admin and sharing)",
-            color=C_BLURPLE,
-        )
-        .field(f"`{p}group rename <id> <name>`", "Rename a group you own.")
-        .field(
-            f"`{p}group transfer <id> @user`",
-            "Hand ownership of the group to another member.",
-        )
-        .field(
-            f"`{p}group delete <id>`",
-            "Delete a group you own and every item inside it.",
-        )
-        .field(
-            f"`{p}group duplicate <id>`",
-            "Clone a group's items into a fresh group you own.",
-        )
-        .field(
-            "Filing items in a group",
-            f"Start an `add` or `list` argument with `#<groupid>`.\n"
-            f"Example: `{p}task add #5 ship the release notes`",
-        )
-        .field(
-            "Moving items around",
-            "The `copy` and `move` subcommands on any note, task or event "
-            "take `me`, an `@user`, or `#<groupid>` as the destination.",
-        ),
-    ], "Groups")
+    ], "Plugins")
 
     cats["Staff controls (.ai)"] = _render([
         card(
@@ -401,10 +227,10 @@ def build_help_categories(p: str) -> dict[str, list[discord.Embed]]:
             f"`{p}ai model` -- the per-guild model picker",
         )
         .field(
-            "Tools and search",
+            "Tools and plugins",
             f"`{p}ai websearch` -- web search backend\n"
             f"`{p}ai tools` -- enable or disable agent tools\n"
-            f"`{p}ai plugins` / `{p}ai reloadtools` -- Lua plugins",
+            f"`{p}ai plugins` -- install, update and manage Lua plugins",
         )
         .field(
             "Memory and emojis",
@@ -428,10 +254,35 @@ class Meta(commands.Cog):
     def __init__(self, bot) -> None:
         self.bot = bot
 
+    def _catalogue(self) -> dict[str, list[discord.Embed]]:
+        """The static help plus a live section for every loaded plugin.
+
+        Plugin sections slot in right after the static ``Plugins`` page so
+        the menu reads: built-in topics, then one section per installed
+        plugin (Notes, Tasks, ...), then the staff controls.
+        """
+        prefix = Config.PREFIX
+        static = build_help_categories(prefix)
+        plugin_cats: dict[str, list[discord.Embed]] = {}
+        if getattr(self.bot, "plugins", None) is not None:
+            try:
+                plugin_cats = self.bot.plugins.help_categories(prefix)
+            except Exception:  # noqa: BLE001
+                plugin_cats = {}
+        if not plugin_cats:
+            return static
+        merged: dict[str, list[discord.Embed]] = {}
+        for name, pages in static.items():
+            merged[name] = pages
+            if name == "Plugins":
+                for pname, ppages in plugin_cats.items():
+                    merged[pname] = ppages
+        return merged
+
     @commands.command(name="help")
     async def help_cmd(self, ctx: ArchimedesContext) -> None:
         """Browse everything Archimedes can do, with usage and examples."""
-        await CategoryPaginator.send(ctx, build_help_categories(Config.PREFIX))
+        await CategoryPaginator.send(ctx, self._catalogue())
 
     @app_commands.command(
         name="help",
@@ -439,9 +290,7 @@ class Meta(commands.Cog):
     )
     async def help_slash(self, interaction: discord.Interaction) -> None:
         """The /help slash command: the same catalogue as .help."""
-        await CategoryPaginator.respond(
-            interaction, build_help_categories(Config.PREFIX),
-        )
+        await CategoryPaginator.respond(interaction, self._catalogue())
 
     @commands.command(name="ping")
     async def ping_cmd(self, ctx: ArchimedesContext) -> None:

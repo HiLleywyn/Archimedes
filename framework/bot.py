@@ -25,7 +25,6 @@ COGS: tuple[str, ...] = (
     "cogs.archimedes",
     "cogs.ai_admin",
     "cogs.sidecar",
-    "cogs.productivity",
 )
 
 
@@ -51,6 +50,7 @@ class ArchimedesBot(commands.Bot):
         self.memory = None      # ai.memory.MemoryService
         self.tools = None       # ai.tools.ToolRegistry
         self.training = None    # ai.training.TrainingLogger
+        self.plugins = None     # framework.plugins.PluginManager
         # Bounded ring of message ids the bot sent as AI replies. Used to
         # tell "user replied to one of my answers" from "user replied to
         # someone else" without a DB round-trip.
@@ -61,11 +61,11 @@ class ArchimedesBot(commands.Bot):
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
     async def setup_hook(self) -> None:
-        from ai.lua_plugins import load_plugins
         from ai.memory import MemoryService
         from ai.redis_store import ShortTermStore
         from ai.tools import build_default_registry
         from ai.training import TrainingLogger
+        from framework.plugins import PluginManager
 
         await self.db.connect()
         self.short_term = ShortTermStore()
@@ -73,7 +73,6 @@ class ArchimedesBot(commands.Bot):
         self.memory = MemoryService(self.db, self.short_term)
         self.training = TrainingLogger(self.db)
         self.tools = build_default_registry()
-        load_plugins(self.tools)
 
         for ext in COGS:
             try:
@@ -81,6 +80,14 @@ class ArchimedesBot(commands.Bot):
                 log.info("loaded cog: %s", ext)
             except Exception:  # noqa: BLE001
                 log.exception("failed to load cog: %s", ext)
+
+        # Plugins load after the cogs so the manager sees every built-in
+        # command and can refuse a plugin command that would collide.
+        self.plugins = PluginManager(self)
+        try:
+            await self.plugins.startup()
+        except Exception:  # noqa: BLE001
+            log.exception("plugin manager failed to start")
 
         try:
             synced = await self.tree.sync()
@@ -99,6 +106,11 @@ class ArchimedesBot(commands.Bot):
         from ai.client import close_client
 
         log.info("Shutting down...")
+        try:
+            if self.plugins is not None:
+                await self.plugins.shutdown()
+        except Exception:  # noqa: BLE001
+            pass
         try:
             await close_client()
         except Exception:  # noqa: BLE001

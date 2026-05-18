@@ -8,8 +8,8 @@ only generic, non-financial tools:
   * ``memory.remember_fact``  -- store a durable fact about the user/server
   * ``memory.recall_facts``   -- read back stored facts
 
-Tools are registered with the :class:`ToolRegistry`; Lua plugins in
-``plugins/*.lua`` can register more (see ``plugins/README``).
+Tools are registered with the :class:`ToolRegistry`; Lua plugins can register
+more through :class:`framework.plugins.manager.PluginManager`.
 ``run_agent_stream`` is the loop that lets the model call them.
 """
 from __future__ import annotations
@@ -83,6 +83,11 @@ class ToolRegistry:
 
     def register(self, spec: ToolSpec) -> None:
         self._tools[spec.name] = spec
+
+    def unregister(self, name: str) -> bool:
+        """Drop a tool by name. Used when a Lua plugin is disabled."""
+        self._disabled.discard(name)
+        return self._tools.pop(name, None) is not None
 
     def tool(self, name: str, description: str, parameters: dict, *,
              category: str = "misc", risk: str = RISK_READ):

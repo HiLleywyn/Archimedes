@@ -25,14 +25,18 @@ runs the test suite.
   time-decayed trait profile (curious, technical, blunt, upbeat, ...), durable
   key/value facts, and per-channel activity context. Every reply gets richer.
 - **Tool calling** -- the model can call generic, non-financial tools:
-  web search, image description, and remember / recall facts. More tools can
-  be added with Lua plugins (`plugins/`).
+  web search, image description, and remember / recall facts.
+- **Lua plugins** -- a full plugin system. A plugin is one `.lua` file that
+  can register prefix commands, agent tools and background loops. Plugins
+  install from a GitHub marketplace, survive restarts, and are managed live
+  with `.ai plugins`.
+- **Productivity** -- private notes, tasks organised into to-do lists, and
+  calendar events with reminders, all delivered as bundled Lua plugins.
+  Personal items stay private (answered in your DMs); groups let members
+  share and collaborate, and any item can be shared, copied, moved or
+  transferred between users and groups.
 - **Memory sidecar** -- long-term facts and episodes, passive learning in
   opted-in channels, and an append-only training corpus of every turn.
-- **Productivity** -- private notes, tasks organised into to-do lists, and
-  calendar events with reminders. Personal items stay private (answered in
-  your DMs); groups let members share and collaborate, and any item can be
-  shared, copied, moved or transferred between users and groups.
 - **Thread or inline replies** -- each member picks their style with
   `.arch chat` / `.arch threads`.
 - **Staff control surface** -- `.ai` tunes feature flags, system prompts,
@@ -59,9 +63,14 @@ commands require the Manage Server permission.
 | `.task` | everyone | Tasks and to-do lists, with optional reminders. |
 | `.event` | everyone | Calendar events with optional reminders. |
 | `.group` | everyone | Create groups, invite members, share and transfer items. |
+| `.coinflip` | everyone | Flip a coin (the example plugin). |
 | `.ai` | Manage Server | The AI control surface (see `.ai help`). |
+| `.ai plugins` | Manage Server | Install, update, enable and disable Lua plugins. |
 | `/help` or `.help` | everyone | A menu of sections, every command with examples. |
 | `.ping` / `.about` | everyone | Latency and bot info. |
+
+The `.note`, `.task`, `.event`, `.group` and `.coinflip` commands are not
+built in -- they come from bundled Lua plugins (see **Lua plugins** below).
 
 ### Productivity, privacy and groups
 
@@ -132,9 +141,35 @@ documented list. The essentials:
 
 ## Lua plugins
 
-Drop a `.lua` file in `plugins/` to register extra agent tools without
-touching Python. See `plugins/README.md` and the `plugins/coinflip.lua`
-example. Run `.ai reloadtools` after adding one.
+A plugin is a single `.lua` file. It can register prefix commands (with
+nested subcommand groups), agent tools the model can call, and background
+loops -- with no Python.
+
+Files in `plugins/` are **bundled** plugins, loaded on every boot: `notes`,
+`tasks`, `events` and `groups` are the productivity suite, and `coinflip` is
+a worked example. `plugins/README.md` documents the plugin contract and the
+`arch` / `ctx` API; the per-plugin document store means a plugin never writes
+SQL.
+
+More plugins install from a marketplace -- an ordinary GitHub repository
+(`hilleywyn/archimedes-plugins` by default). Server moderators manage every
+plugin with `.ai plugins`:
+
+| Command | What |
+|---|---|
+| `.ai plugins` / `list` | Installed plugins and their state. |
+| `.ai plugins search [query]` | Browse the marketplace. |
+| `.ai plugins info <id>` | One plugin's manifest, commands and tools. |
+| `.ai plugins install <id>` | Install a plugin from the marketplace. |
+| `.ai plugins uninstall <id>` | Remove a marketplace plugin. |
+| `.ai plugins enable` / `disable <id>` | Load or unload a plugin live. |
+| `.ai plugins update [id]` | Pull the latest version. |
+| `.ai plugins reload [id]` | Recompile and reload from source. |
+
+Installed and enabled plugins persist across restarts: bundled plugins ship
+in the repository, and a marketplace plugin's Lua source is stored in the
+database, so a redeploy of the (otherwise stateless) container restores the
+exact plugin set.
 
 ## Layout
 
@@ -144,10 +179,11 @@ config.py            env-driven configuration
 pyproject.toml       project metadata + pytest config
 requirements.txt     runtime dependencies
 framework/           bot class, embeds, UI, context, DB layer, audit
+framework/plugins/   the Lua plugin system: runtime, API, registry, manager
 ai/                  model client, memory, traits, context, tools, safety
-cogs/                chat brain, .arch, .ai admin, sidecar, productivity, meta
+cogs/                chat brain, .arch, .ai admin, sidecar, meta
 database/schema.sql  idempotent schema, applied on boot
-plugins/             Lua tool plugins (+ a working coinflip example)
+plugins/             bundled Lua plugins (notes, tasks, events, groups, coinflip)
 tests/               offline smoke tests
 .github/workflows/   CI (lint + tests)
 Dockerfile           container build

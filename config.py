@@ -90,6 +90,14 @@ class Config:
     DEBUG: bool = _env_bool("DEBUG", False)
     LOG_LEVEL: str = _env("LOG_LEVEL", "INFO").upper()
 
+    # ── Lua plugins ───────────────────────────────────────────────────────────
+    PLUGINS_ENABLED: bool = _env_bool("PLUGINS_ENABLED", True)
+    PLUGIN_REGISTRY_REPO: str = _env(
+        "PLUGIN_REGISTRY_REPO", "hilleywyn/archimedes-plugins",
+    )
+    PLUGIN_REGISTRY_REF: str = _env("PLUGIN_REGISTRY_REF", "main")
+    GITHUB_TOKEN: str = _env("GITHUB_TOKEN")
+
     @classmethod
     def validate(cls) -> list[str]:
         """Return a list of fatal configuration problems (empty when OK)."""
