@@ -8,13 +8,15 @@ request leaves the process the target is validated:
 * every IP the host resolves to is checked, and a request to a private,
   loopback, link-local, multicast or otherwise non-public address is refused.
 
-Redirects are followed by hand so the ``Location`` of every hop is validated
-the same way -- a public URL cannot bounce a plugin onto an internal one.
+Redirects are followed by hand so the ``Location`` scheme of every hop is
+validated the same way -- a public URL cannot bounce a plugin onto an
+internal one.
 
-Known limitation: validation resolves the host, then ``aiohttp`` resolves it
-again when it opens the socket, leaving a small DNS-rebinding window between
-the two. v1 accepts this; pinning the connection to the validated IP with a
-custom resolver is the hardening follow-up.
+For a host given by name the address guard runs inside a custom
+:class:`GuardedResolver`, so the IP ``aiohttp`` connects to is the exact IP
+that was checked -- there is no second DNS lookup and so no rebinding window.
+A host given as a bare IP literal never reaches a resolver, so it is checked
+directly before the request.
 
 :func:`is_blocked_ip` and :func:`validate_url` are pure -- the offline test
 suite exercises the guard logic through them with no network.
@@ -29,6 +31,7 @@ import socket
 from urllib.parse import urljoin, urlsplit
 
 import aiohttp
+from aiohttp.abc import AbstractResolver
 
 from config import Config
 
@@ -91,30 +94,68 @@ def validate_url(url: str) -> tuple[str, str, int | None]:
     return scheme, host, port
 
 
-async def resolve_and_check(host: str, port: int | None) -> None:
-    """Resolve ``host`` and raise :class:`HttpError` if any address is blocked.
+def reject_blocked_literal(host: str) -> None:
+    """Refuse a host that is a bare, non-public IP literal.
 
-    Every resolved address is checked, not just the first, so a host that
-    round-robins a public and a private record cannot slip through.
+    ``aiohttp`` connects straight to an IP-literal host without ever calling
+    a resolver, so :class:`GuardedResolver` never sees it. A literal is
+    checked here instead. A host given by name is left for the resolver and
+    passes through untouched.
     """
     if Config.PLUGIN_HTTP_ALLOW_PRIVATE:
         return
-    # A host given as a bare IP literal still has to clear the guard.
-    loop = asyncio.get_running_loop()
     try:
-        infos = await loop.getaddrinfo(
-            host, port or 0, type=socket.SOCK_STREAM,
-        )
-    except (socket.gaierror, OSError) as exc:
-        raise HttpError(f"could not resolve {host!r}") from exc
-    if not infos:
-        raise HttpError(f"could not resolve {host!r}")
-    for info in infos:
-        addr = info[4][0]
-        if is_blocked_ip(addr):
-            raise HttpError(
-                f"{host!r} resolves to a non-public address and is blocked"
+        ipaddress.ip_address(host)
+    except ValueError:
+        return  # a name, not a literal -- GuardedResolver judges it later
+    if is_blocked_ip(host):
+        raise HttpError(f"{host!r} is a non-public address and is blocked")
+
+
+class GuardedResolver(AbstractResolver):
+    """An ``aiohttp`` resolver that refuses to hand back a non-public address.
+
+    Pinning every connection to addresses this resolver has already cleared
+    closes the gap between validation and connect: ``aiohttp`` dials the exact
+    IPs returned here and resolves the host nowhere else, so a name cannot be
+    rebound to an internal address after the check.
+
+    If any address a host resolves to is blocked, the whole host is refused --
+    a name that round-robins a public and a private record cannot slip a
+    request through on a lucky draw.
+    """
+
+    async def resolve(
+        self, host: str, port: int = 0, family: int = socket.AF_INET,
+    ) -> list[dict]:
+        loop = asyncio.get_running_loop()
+        try:
+            infos = await loop.getaddrinfo(
+                host, port, family=family, type=socket.SOCK_STREAM,
             )
+        except (socket.gaierror, OSError) as exc:
+            raise HttpError(f"could not resolve {host!r}") from exc
+        results: list[dict] = []
+        for fam, _type, proto, _canon, sockaddr in infos:
+            addr = sockaddr[0]
+            if not Config.PLUGIN_HTTP_ALLOW_PRIVATE and is_blocked_ip(addr):
+                raise HttpError(
+                    f"{host!r} resolves to a non-public address and is blocked"
+                )
+            results.append({
+                "hostname": host,
+                "host": addr,
+                "port": sockaddr[1],
+                "family": fam,
+                "proto": proto,
+                "flags": socket.AI_NUMERICHOST,
+            })
+        if not results:
+            raise HttpError(f"could not resolve {host!r}")
+        return results
+
+    async def close(self) -> None:
+        return None
 
 
 def _headers_to_dict(headers) -> dict:
@@ -153,11 +194,17 @@ async def fetch(
     current_body = body
     current_json = json_body
 
+    connector = aiohttp.TCPConnector(resolver=GuardedResolver())
     try:
-        async with aiohttp.ClientSession(timeout=client_timeout) as session:
+        async with aiohttp.ClientSession(
+            timeout=client_timeout, connector=connector,
+        ) as session:
             for _hop in range(max(0, int(max_redirects)) + 1):
-                _scheme, host, port = validate_url(current_url)
-                await resolve_and_check(host, port)
+                # Scheme and userinfo are checked here, and an IP-literal host
+                # directly; a named host is guarded in GuardedResolver when
+                # the connection opens.
+                _scheme, host, _port = validate_url(current_url)
+                reject_blocked_literal(host)
                 kwargs: dict = {"headers": request_headers,
                                 "allow_redirects": False}
                 if current_json is not None:
