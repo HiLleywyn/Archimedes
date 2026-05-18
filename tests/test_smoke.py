@@ -372,6 +372,32 @@ def test_ssrf_guard_rejects_bad_schemes() -> None:
     assert scheme == "https" and host == "example.com" and port == 8443
 
 
+def test_ssrf_guard_blocks_ip_literal_urls() -> None:
+    from framework.plugins.net import HttpError, reject_blocked_literal
+
+    # aiohttp dials an IP-literal host without a resolver, so literals are
+    # checked directly. The cloud metadata address must be among the blocked.
+    for host in ("127.0.0.1", "169.254.169.254", "10.0.0.5", "::1", "fd00::1"):
+        with pytest.raises(HttpError):
+            reject_blocked_literal(host)
+    # A public literal passes; a hostname passes through to the resolver.
+    reject_blocked_literal("8.8.8.8")
+    reject_blocked_literal("example.com")
+
+
+async def test_guarded_resolver_pins_to_checked_addresses() -> None:
+    from framework.plugins.net import GuardedResolver, HttpError
+
+    resolver = GuardedResolver()
+    try:
+        results = await resolver.resolve("8.8.8.8", 443)
+        assert results and all(r["host"] == "8.8.8.8" for r in results)
+        with pytest.raises(HttpError):
+            await resolver.resolve("127.0.0.1", 80)
+    finally:
+        await resolver.close()
+
+
 def test_plugin_util_json_hash_encode() -> None:
     import hashlib
     import uuid as _uuid
