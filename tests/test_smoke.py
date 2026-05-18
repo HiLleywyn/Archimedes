@@ -17,6 +17,9 @@ _MODULES = [
     "framework.plugins", "framework.plugins.runtime", "framework.plugins.api",
     "framework.plugins.registry", "framework.plugins.manager",
     "framework.plugins.net", "framework.plugins.util", "framework.plugins.events",
+    "framework.pipeline", "framework.pipeline.envelope",
+    "framework.pipeline.validation", "framework.pipeline.processing",
+    "framework.pipeline.injection", "framework.pipeline.transforms",
     "ai.emoji_safety", "ai.safety", "ai.quota", "ai.client", "ai.models",
     "ai.prompts", "ai.redis_store", "ai.traits", "ai.memory", "ai.context",
     "ai.tools", "ai.training", "ai.emoji_index",
@@ -64,8 +67,9 @@ def test_tool_registry_is_generic_only() -> None:
     assert names == {
         "data.web_search", "vision.describe_image",
         "memory.remember_fact", "memory.recall_facts",
+        "transform.slice", "transform.project", "transform.aggregate",
     }
-    assert len(reg.as_openai_tools()) == 4
+    assert len(reg.as_openai_tools()) == 7
 
 
 def test_tool_registry_unregister() -> None:
