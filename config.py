@@ -110,6 +110,16 @@ class Config:
     # to reach a private network. Off by default -- leave it off.
     PLUGIN_HTTP_ALLOW_PRIVATE: bool = _env_bool("PLUGIN_HTTP_ALLOW_PRIVATE", False)
 
+    # ── Tool execution pipeline ───────────────────────────────────────────────
+    # Compression caps for the deterministic tool-output pipeline. A string
+    # field longer than PIPELINE_MAX_STRING is truncated; a list longer than
+    # PIPELINE_MAX_LIST is capped. PIPELINE_INJECT_MAX_CHARS is the hard
+    # ceiling on the JSON tool result handed back to the model. Tune these if
+    # tool results are arriving over- or under-compressed.
+    PIPELINE_MAX_STRING: int = _env_int("PIPELINE_MAX_STRING", 1200)
+    PIPELINE_MAX_LIST: int = _env_int("PIPELINE_MAX_LIST", 25)
+    PIPELINE_INJECT_MAX_CHARS: int = _env_int("PIPELINE_INJECT_MAX_CHARS", 4000)
+
     @classmethod
     def validate(cls) -> list[str]:
         """Return a list of fatal configuration problems (empty when OK)."""

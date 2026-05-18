@@ -1,4 +1,4 @@
-"""ai/tools.py -- agent tool registry, generic tools, and the tool loop.
+"""ai/tools.py -- agent tool registry, generic tools, and the orchestrator.
 
 The standalone bot keeps the full tool-calling infrastructure but ships
 only generic, non-financial tools:
@@ -7,10 +7,18 @@ only generic, non-financial tools:
   * ``vision.describe_image`` -- describe an image attachment
   * ``memory.remember_fact``  -- store a durable fact about the user/server
   * ``memory.recall_facts``   -- read back stored facts
+  * ``transform.slice``       -- deterministic top-N of a list
+  * ``transform.project``     -- deterministic field selection on a list
+  * ``transform.aggregate``   -- deterministic sum/min/max/mean/count
 
 Tools are registered with the :class:`ToolRegistry`; Lua plugins can register
 more through :class:`framework.plugins.manager.PluginManager`.
-``run_agent_stream`` is the loop that lets the model call them.
+
+``run_agent_stream`` is the orchestrator: the control plane that routes the
+model to tools and back. Every tool result it collects is run through the
+:mod:`framework.pipeline` -- wrapped in the strict contract envelope,
+validated by the Pydantic gate, deterministically compressed, and reduced to
+minimal JSON -- before the model is allowed to see it.
 """
 from __future__ import annotations
 
@@ -18,6 +26,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
@@ -27,6 +36,8 @@ from config import Config
 from ai.client import stream_completion, complete
 from ai.models import resolve_model
 from ai.safety import sanitize_context_snippet
+from framework.pipeline import run_pipeline
+from framework.pipeline.transforms import aggregate, project_fields, slice_items
 
 log = logging.getLogger(__name__)
 
@@ -54,7 +65,13 @@ class ToolContext:
 
 @dataclass
 class ToolSpec:
-    """A registered tool: schema plus its async handler."""
+    """A registered tool: schema plus its async handler.
+
+    ``result_fields``, when set, is the tool's declared result schema: the
+    top-level keys its ``data`` object is expected to carry. The processing
+    pipeline filters the result down to those fields, so an unexpected key
+    never drifts through to the model.
+    """
 
     name: str
     description: str
@@ -62,6 +79,7 @@ class ToolSpec:
     handler: Callable[[dict, ToolContext], Awaitable[dict]]
     category: str = "misc"
     risk: str = RISK_READ
+    result_fields: tuple[str, ...] | None = None
 
     def as_openai_tool(self) -> dict:
         return {
@@ -261,6 +279,28 @@ async def _recall_facts(args: dict, ctx: ToolContext) -> dict:
     }
 
 
+# ── Deterministic transform tools ─────────────────────────────────────────────
+# Pure computation: no model, no I/O. These handlers ignore ``ctx`` entirely
+# -- their whole answer is a function of ``args``. They let the model offload
+# slicing, field selection and arithmetic instead of doing it by eye.
+async def _transform_slice(args: dict, ctx: ToolContext) -> dict:
+    return slice_items(
+        args.get("items"), args.get("n"),
+        key=args.get("key"), order=str(args.get("order") or "desc"),
+    )
+
+
+async def _transform_project(args: dict, ctx: ToolContext) -> dict:
+    return project_fields(args.get("items"), args.get("fields"))
+
+
+async def _transform_aggregate(args: dict, ctx: ToolContext) -> dict:
+    return aggregate(
+        args.get("items"), field=args.get("field"),
+        op=str(args.get("op") or "sum"),
+    )
+
+
 def build_default_registry() -> ToolRegistry:
     """Create a registry pre-loaded with the generic tool set."""
     reg = ToolRegistry()
@@ -272,6 +312,7 @@ def build_default_registry() -> ToolRegistry:
             "query": {"type": "string", "description": "The search query."},
         }, "required": ["query"]},
         _web_search, category="data", risk=RISK_READ,
+        result_fields=("query", "results"),
     ))
     reg.register(ToolSpec(
         "vision.describe_image",
@@ -281,6 +322,7 @@ def build_default_registry() -> ToolRegistry:
             "url": {"type": "string", "description": "The image URL."},
         }, "required": ["url"]},
         _describe_image, category="vision", risk=RISK_READ,
+        result_fields=("description",),
     ))
     reg.register(ToolSpec(
         "memory.remember_fact",
@@ -293,12 +335,57 @@ def build_default_registry() -> ToolRegistry:
                       "description": "Whether the fact is about the user or the server."},
         }, "required": ["key", "value"]},
         _remember_fact, category="memory", risk=RISK_MUTATE,
+        result_fields=("stored", "scope", "key"),
     ))
     reg.register(ToolSpec(
         "memory.recall_facts",
         "Read back every durable fact stored about the current user and server.",
         {"type": "object", "properties": {}},
         _recall_facts, category="memory", risk=RISK_READ,
+        result_fields=("about_user", "about_server"),
+    ))
+    reg.register(ToolSpec(
+        "transform.slice",
+        "Return the top N items of a list you already have. Deterministic: "
+        "use this instead of picking items by eye. Optionally sorts by an "
+        "object field first.",
+        {"type": "object", "properties": {
+            "items": {"type": "array", "description": "The list to slice."},
+            "n": {"type": "integer", "description": "How many items to keep."},
+            "key": {"type": "string",
+                    "description": "Optional object field to sort by first."},
+            "order": {"type": "string", "enum": ["asc", "desc"],
+                      "description": "Sort direction when key is set."},
+        }, "required": ["items", "n"]},
+        _transform_slice, category="transform", risk=RISK_READ,
+        result_fields=("items", "returned", "total"),
+    ))
+    reg.register(ToolSpec(
+        "transform.project",
+        "Keep only the named fields on each object of a list, dropping every "
+        "other field. Deterministic: use this to trim wide rows.",
+        {"type": "object", "properties": {
+            "items": {"type": "array", "description": "The list of objects."},
+            "fields": {"type": "array", "items": {"type": "string"},
+                       "description": "The field names to keep."},
+        }, "required": ["items", "fields"]},
+        _transform_project, category="transform", risk=RISK_READ,
+        result_fields=("items", "returned", "fields"),
+    ))
+    reg.register(ToolSpec(
+        "transform.aggregate",
+        "Reduce a list of numbers to one metric. Deterministic: use this "
+        "instead of doing arithmetic in your head.",
+        {"type": "object", "properties": {
+            "items": {"type": "array", "description": "The list to reduce."},
+            "field": {"type": "string",
+                      "description": "Optional object field to read the number from."},
+            "op": {"type": "string",
+                   "enum": ["sum", "min", "max", "mean", "count"],
+                   "description": "The metric to compute."},
+        }, "required": ["items", "op"]},
+        _transform_aggregate, category="transform", risk=RISK_READ,
+        result_fields=("op", "value", "count", "skipped"),
     ))
     return reg
 
@@ -377,15 +464,29 @@ async def run_agent_stream(
             except json.JSONDecodeError:
                 args = {}
             yield {"type": "tool_start", "tool": name}
+            started = time.monotonic()
             result = await registry.run(name, args, ctx)
+            elapsed_ms = int((time.monotonic() - started) * 1000)
             tool_names.append(name)
-            if name == "data.web_search" and isinstance(result, dict) and result.get("results"):
-                yield {"type": "sources", "results": result["results"]}
+
+            # The result does not go to the model raw. The pipeline wraps it
+            # in the contract envelope, runs it through the validation gate,
+            # compresses it deterministically and reduces it to minimal JSON.
+            spec = registry.get(name)
+            piped = run_pipeline(
+                name, result,
+                meta={"round": _round + 1, "elapsed_ms": elapsed_ms},
+                result_fields=spec.result_fields if spec else None,
+            )
+            data = piped.envelope.get("data")
+            if (name == "data.web_search" and isinstance(data, dict)
+                    and data.get("results")):
+                yield {"type": "sources", "results": data["results"]}
             yield {"type": "tool_done", "tool": name}
             convo.append({
                 "role": "tool",
                 "tool_call_id": tc.get("id", ""),
-                "content": json.dumps(result, default=str)[:4000],
+                "content": piped.injected,
             })
 
     # Tool-round budget exhausted -- ask for a final plain answer.

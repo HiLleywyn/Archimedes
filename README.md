@@ -25,8 +25,10 @@ runs the test suite.
 - **Context learning** -- it builds and refreshes a per-user memory summary, a
   time-decayed trait profile (curious, technical, blunt, upbeat, ...), durable
   key/value facts, and per-channel activity context. Every reply gets richer.
-- **Tool calling** -- the model can call generic, non-financial tools:
-  web search, image description, and remember / recall facts.
+- **Tool calling** -- the model can call generic, non-financial tools: web
+  search, image description, remember / recall facts, and deterministic list
+  transforms. Every tool result is run through a strict execution pipeline
+  before the model sees it (see **Tool execution pipeline**).
 - **Lua plugins** -- a full plugin system. A plugin is one `.lua` file that
   can register prefix commands, agent tools, background loops and event
   handlers, and reach out through an HTTP client, a Discord read/write API,
@@ -174,6 +176,39 @@ in the repository, and a marketplace plugin's Lua source is stored in the
 database, so a redeploy of the (otherwise stateless) container restores the
 exact plugin set.
 
+## Tool execution pipeline
+
+A tool result never goes straight from a handler to the model. It travels a
+fixed, layered path, and every layer is deterministic machinery:
+
+```
+raw tool return
+  -> envelope     wrap into the strict contract shape
+  -> validation   the Pydantic gate: pass, or become a structured error
+  -> processing   schema filter, deterministic compression
+  -> injection    strip internal noise, emit minimal clean JSON
+  -> the model
+```
+
+The **contract** is one fixed envelope -- `status`, `tool`, `version`,
+`data`, `error`, `meta` -- that every downstream stage assumes is exact. The
+**validation gate** is a hard Pydantic barrier: a malformed or drifted
+envelope is rejected outright and replaced with a structured error, so it
+never reaches the model. The **processing** stage filters a result to the
+fields its tool declared and compresses it deterministically -- bounding
+string length, list size and nesting depth -- with every trim recorded as a
+note. The **injection** formatter strips the contract version, timing and
+other internal bookkeeping and emits the smallest clean JSON that still
+answers the question, hard-capped so one tool result can never blow the
+context window.
+
+`transform.slice`, `transform.project` and `transform.aggregate` round this
+out: pure, non-model tools for the list work the model would otherwise do by
+eye -- top-N, field selection, and sum / min / max / mean / count.
+
+The pipeline lives in `framework/pipeline/`; the compression caps are tunable
+through the `PIPELINE_*` environment variables.
+
 ## Layout
 
 ```
@@ -183,6 +218,7 @@ pyproject.toml       project metadata + pytest config
 requirements.txt     runtime dependencies
 framework/           bot class, embeds, UI, context, DB layer, audit
 framework/plugins/   the Lua plugin system: runtime, API, registry, manager
+framework/pipeline/  the tool-execution pipeline: envelope, gate, processing
 ai/                  model client, memory, traits, context, tools, safety
 cogs/                chat brain, .arch, .ai admin, sidecar, meta
 database/schema.sql  idempotent schema, applied on boot

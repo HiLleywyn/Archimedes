@@ -81,7 +81,12 @@ table describing the call:
 | `ctx.reply(card)` | post an embed into the conversation's channel |
 | `ctx.dm(user_id, card)` | DM a user an embed |
 
-A handler returns a table; it is sent back to the model as the tool result.
+A handler returns a table. It is not shown to the model raw: it is wrapped in
+the strict tool contract envelope, run through the validation gate,
+deterministically compressed and reduced to minimal JSON first. A
+`{ error = "..." }` table becomes a structured error result. Keep returned
+tables small and flat -- the pipeline bounds anything oversized, but a tight
+result reads best.
 
 ### Loops
 
