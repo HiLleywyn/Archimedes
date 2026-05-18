@@ -1,7 +1,7 @@
 """ai/models.py -- model categories and the per-guild model picker.
 
 Each category (chat, tools, vision, search, reason) has an env-var default.
-A guild admin can override any category via ``,ai model set``; the override
+A guild admin can override any category via ``.ai model set``; the override
 lives in ``ai_model_defaults`` and wins over the env default at runtime.
 """
 from __future__ import annotations
@@ -43,14 +43,14 @@ class Category:
 
 
 TOOL_CATEGORIES: tuple[Category, ...] = (
-    Category("chat", "Chat", "Conversational replies to mentions / ,ask."),
+    Category("chat", "Chat", "Conversational replies to mentions / .ask."),
     Category("tools", "Tools", "The agent loop that calls tools."),
     Category("vision", "Vision", "Image understanding (describe attachments)."),
     Category("search", "Search", "Summarising web-search results."),
     Category("reason", "Reason", "Heavier multi-step reasoning."),
 )
 
-# A small curated catalog surfaced by ,ai model show. Purely advisory.
+# A small curated catalog surfaced by .ai model show. Purely advisory.
 _CATALOG: dict[str, list[ModelOption]] = {
     "chat": [
         ModelOption("openrouter", "openai/gpt-4o-mini", "GPT-4o mini (fast, cheap)"),

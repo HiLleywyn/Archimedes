@@ -47,7 +47,7 @@ class ShortTermStore:
 
     @staticmethod
     def _key(guild_id: int, channel_id: int, user_id: int) -> str:
-        return f"discoai:st:{guild_id}:{channel_id}:{user_id}"
+        return f"archimedes:st:{guild_id}:{channel_id}:{user_id}"
 
     async def add_turn(
         self, guild_id: int, channel_id: int, user_id: int, role: str, content: str,
@@ -84,13 +84,13 @@ class ShortTermStore:
         return out
 
     async def clear_user(self, guild_id: int, user_id: int) -> int:
-        return await self._clear_pattern(f"discoai:st:{guild_id}:*:{user_id}")
+        return await self._clear_pattern(f"archimedes:st:{guild_id}:*:{user_id}")
 
     async def clear_channel(self, guild_id: int, channel_id: int) -> int:
-        return await self._clear_pattern(f"discoai:st:{guild_id}:{channel_id}:*")
+        return await self._clear_pattern(f"archimedes:st:{guild_id}:{channel_id}:*")
 
     async def clear_guild(self, guild_id: int) -> int:
-        return await self._clear_pattern(f"discoai:st:{guild_id}:*")
+        return await self._clear_pattern(f"archimedes:st:{guild_id}:*")
 
     async def _clear_pattern(self, pattern: str) -> int:
         if self._redis is None:

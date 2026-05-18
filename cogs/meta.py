@@ -7,7 +7,7 @@ import discord
 from discord.ext import commands
 
 from config import Config
-from framework.context import DiscoContext
+from framework.context import ArchimedesContext
 from framework.embed import card
 from framework.ui import C_INFO, C_PURPLE
 
@@ -19,12 +19,12 @@ class Meta(commands.Cog):
         self.bot = bot
 
     @commands.command(name="help")
-    async def help_cmd(self, ctx: DiscoContext) -> None:
-        """Show what Disco can do."""
+    async def help_cmd(self, ctx: ArchimedesContext) -> None:
+        """Show what Archimedes can do."""
         p = ctx.prefix
         b = (
             card(
-                "Disco AI",
+                "Archimedes",
                 color=C_PURPLE,
                 description=(
                     "A memory-backed AI chat companion. Just `@`mention me, "
@@ -33,16 +33,16 @@ class Meta(commands.Cog):
             )
             .field(
                 "Chatting",
-                f"`@Disco <message>` -- talk to me\n"
+                f"`@Archimedes <message>` -- talk to me\n"
                 f"`{p}ask <question>` -- ask me something\n"
                 "Reply to any of my messages to keep the conversation going.",
                 False,
             )
             .field(
                 "Your settings",
-                f"`{p}disco` -- tune how I talk to you\n"
-                f"`{p}disco ctx` -- see what I have learned about you\n"
-                f"`{p}disco optout` -- stop me learning about you",
+                f"`{p}arch` -- tune how I talk to you\n"
+                f"`{p}arch ctx` -- see what I have learned about you\n"
+                f"`{p}arch optout` -- stop me learning about you",
                 False,
             )
             .field(
@@ -50,12 +50,12 @@ class Meta(commands.Cog):
                 f"`{p}ai` -- the AI control surface (Manage Server)",
                 False,
             )
-            .footer("Disco AI -- standalone AI chat bot")
+            .footer("Archimedes -- standalone AI chat bot")
         )
         await ctx.reply(embed=b.build(), mention_author=False)
 
     @commands.command(name="ping")
-    async def ping_cmd(self, ctx: DiscoContext) -> None:
+    async def ping_cmd(self, ctx: ArchimedesContext) -> None:
         """Check the bot's latency."""
         start = time.monotonic()
         msg = await ctx.reply("Pinging...", mention_author=False)
@@ -68,10 +68,10 @@ class Meta(commands.Cog):
         ).build())
 
     @commands.command(name="about", aliases=["info"])
-    async def about_cmd(self, ctx: DiscoContext) -> None:
+    async def about_cmd(self, ctx: ArchimedesContext) -> None:
         """About this bot."""
         b = (
-            card("About Disco AI", color=C_PURPLE, description=(
+            card("About Archimedes", color=C_PURPLE, description=(
                 "A standalone AI chat bot: memory-backed conversation with "
                 "per-user, per-channel and per-server context learning."
             ))

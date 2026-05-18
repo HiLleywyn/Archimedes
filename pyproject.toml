@@ -1,5 +1,5 @@
 [project]
-name = "discoai"
+name = "archimedes"
 version = "1.0.0"
 description = "A standalone, memory-backed AI chat bot for Discord."
 readme = "README.md"

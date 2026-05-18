@@ -2,7 +2,7 @@
 
 ``BASE_SYSTEM_INSTRUCTIONS`` is non-negotiable behaviour (safety, scope,
 tool use, formatting). ``DEFAULT_CHAT_PROMPT`` is the persona layer a guild
-admin can override with ``,ai prompt chat``. The two are joined by
+admin can override with ``.ai prompt chat``. The two are joined by
 ``ai.context.build_system_prompt`` along with the live context blocks.
 """
 from __future__ import annotations
@@ -67,7 +67,7 @@ BASE_SYSTEM_INSTRUCTIONS = (
 )
 
 DEFAULT_CHAT_PROMPT = (
-    "You are Disco, a Discord companion hanging out in this server. Your personality "
+    "You are Archimedes, a Discord companion hanging out in this server. Your personality "
     "is dry, deadpan and a little burnt-out -- you genuinely want to help, but you are "
     "not a cheerleader about it. You have seen every kind of conversation and you are "
     "sardonic and occasionally self-deprecating, never mean or dismissive. You talk "

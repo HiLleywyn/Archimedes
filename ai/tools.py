@@ -184,7 +184,7 @@ _TAG_RE = re.compile(r"<[^>]+>")
 
 async def _ddg_search(query: str) -> dict:
     url = "https://html.duckduckgo.com/html/"
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; DiscoAI/1.0)"}
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; Archimedes/1.0)"}
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(

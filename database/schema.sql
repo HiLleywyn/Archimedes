@@ -1,5 +1,5 @@
 -- ──────────────────────────────────────────────────────────────────────────
--- Disco AI -- database schema.
+-- Archimedes -- database schema.
 --
 -- Idempotent: every statement is CREATE ... IF NOT EXISTS, so this file is
 -- safe to run on every boot. Adding a column later means adding an
@@ -120,7 +120,7 @@ CREATE INDEX IF NOT EXISTS idx_channel_context_lookup
     ON channel_context (guild_id, channel_id, created_at);
 
 -- ── Memory sidecar: long-term facts + episodes ─────────────────────────────
-CREATE TABLE IF NOT EXISTS disco_facts (
+CREATE TABLE IF NOT EXISTS archimedes_facts (
     scope      TEXT NOT NULL,
     key        TEXT NOT NULL,
     value      TEXT NOT NULL,
@@ -130,17 +130,17 @@ CREATE TABLE IF NOT EXISTS disco_facts (
     PRIMARY KEY (scope, key)
 );
 
-CREATE TABLE IF NOT EXISTS disco_episodes (
+CREATE TABLE IF NOT EXISTS archimedes_episodes (
     id         BIGSERIAL PRIMARY KEY,
     scope      TEXT   NOT NULL,
     summary    TEXT   NOT NULL,
     tags       TEXT[] NOT NULL DEFAULT '{}',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS idx_disco_episodes_scope
-    ON disco_episodes (scope, created_at);
+CREATE INDEX IF NOT EXISTS idx_archimedes_episodes_scope
+    ON archimedes_episodes (scope, created_at);
 
-CREATE TABLE IF NOT EXISTS disco_passive_channels (
+CREATE TABLE IF NOT EXISTS archimedes_passive_channels (
     guild_id   BIGINT NOT NULL,
     channel_id BIGINT NOT NULL,
     enabled_by BIGINT,
@@ -149,7 +149,7 @@ CREATE TABLE IF NOT EXISTS disco_passive_channels (
 );
 
 -- ── Training corpus: every chat turn, append-only ──────────────────────────
-CREATE TABLE IF NOT EXISTS disco_training_turns (
+CREATE TABLE IF NOT EXISTS archimedes_training_turns (
     id              BIGSERIAL PRIMARY KEY,
     user_id         BIGINT NOT NULL,
     guild_id        BIGINT NOT NULL,
@@ -162,23 +162,23 @@ CREATE TABLE IF NOT EXISTS disco_training_turns (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- ── Saved Disco answers (,disco save) ──────────────────────────────────────
-CREATE TABLE IF NOT EXISTS disco_saved_messages (
+-- ── Saved Archimedes answers (.arch save) ──────────────────────────────────────
+CREATE TABLE IF NOT EXISTS archimedes_saved_messages (
     id                 BIGSERIAL PRIMARY KEY,
     user_id            BIGINT NOT NULL,
     guild_id           BIGINT NOT NULL,
     channel_id         BIGINT NOT NULL,
-    disco_message_id   BIGINT NOT NULL,
+    archimedes_message_id   BIGINT NOT NULL,
     trigger_message_id BIGINT,
     prompt_text        TEXT   NOT NULL DEFAULT '',
     response_text      TEXT   NOT NULL DEFAULT '',
     jump_url           TEXT,
     saved_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (user_id, guild_id, disco_message_id)
+    UNIQUE (user_id, guild_id, archimedes_message_id)
 );
 
--- ── Per-member reply mode (,disco chat | threads) ──────────────────────────
-CREATE TABLE IF NOT EXISTS disco_reply_modes (
+-- ── Per-member reply mode (.arch chat | threads) ──────────────────────────
+CREATE TABLE IF NOT EXISTS archimedes_reply_modes (
     user_id  BIGINT NOT NULL,
     guild_id BIGINT NOT NULL,
     mode     TEXT   NOT NULL DEFAULT 'thread',

@@ -130,17 +130,17 @@ class Database:
             "threaded": bool(s.get("ai_threaded", True)),
         }
 
-    # ── reply mode (,disco chat | threads) ────────────────────────────────────
-    async def get_disco_reply_mode(self, user_id: int, guild_id: int) -> str:
+    # ── reply mode (.arch chat | threads) ────────────────────────────────────
+    async def get_archimedes_reply_mode(self, user_id: int, guild_id: int) -> str:
         val = await self.fetch_val(
-            "SELECT mode FROM disco_reply_modes WHERE user_id=$1 AND guild_id=$2",
+            "SELECT mode FROM archimedes_reply_modes WHERE user_id=$1 AND guild_id=$2",
             int(user_id), int(guild_id),
         )
         return val or "thread"
 
-    async def set_disco_reply_mode(self, user_id: int, guild_id: int, mode: str) -> None:
+    async def set_archimedes_reply_mode(self, user_id: int, guild_id: int, mode: str) -> None:
         await self.execute(
-            "INSERT INTO disco_reply_modes (user_id, guild_id, mode) VALUES ($1,$2,$3) "
+            "INSERT INTO archimedes_reply_modes (user_id, guild_id, mode) VALUES ($1,$2,$3) "
             "ON CONFLICT (user_id, guild_id) DO UPDATE SET mode=EXCLUDED.mode",
             int(user_id), int(guild_id), mode,
         )
@@ -196,7 +196,7 @@ class Database:
             "ON CONFLICT DO NOTHING",
             int(user_id), int(guild_id),
         )
-        # Opting out wipes everything Disco learned about the member.
+        # Opting out wipes everything Archimedes learned about the member.
         await self.wipe_ai_user_state(user_id, guild_id)
 
     async def clear_ai_opt_out(self, user_id: int, guild_id: int) -> None:
@@ -241,7 +241,7 @@ class Database:
         )
         return {int(r["user_id"]): r["memory"] for r in rows if r["memory"]}
 
-    # ── bulk wipes (used by ,disco ctx clear / ,ai recontext) ─────────────────
+    # ── bulk wipes (used by .arch ctx clear / .ai recontext) ─────────────────
     async def wipe_ai_user_state(self, user_id: int, guild_id: int) -> dict[str, int]:
         """Drop every per-user AI row in a guild. Returns per-table counts."""
         out: dict[str, int] = {}
@@ -259,10 +259,10 @@ class Database:
         # query planner's parameter type inference.
         scope = f"user:{int(user_id)}:{int(guild_id)}"
         status = await self.execute(
-            "DELETE FROM disco_facts WHERE scope=$1", scope,
+            "DELETE FROM archimedes_facts WHERE scope=$1", scope,
         )
         if _rowcount(status):
-            out["disco_facts"] = _rowcount(status)
+            out["archimedes_facts"] = _rowcount(status)
         return out
 
     async def wipe_ai_guild_state(self, guild_id: int) -> dict[str, int]:
@@ -279,7 +279,7 @@ class Database:
                 out[table] = _rowcount(status)
         guild_pat = f"guild:{int(guild_id)}"
         user_pat = f"user:%:{int(guild_id)}"
-        for table in ("disco_facts", "disco_episodes"):
+        for table in ("archimedes_facts", "archimedes_episodes"):
             status = await self.execute(
                 f"DELETE FROM {table} WHERE scope=$1 OR scope LIKE $2",
                 guild_pat, user_pat,
@@ -295,38 +295,38 @@ class Database:
         )
         return _rowcount(status)
 
-    # ── saved Disco answers (,disco save) ─────────────────────────────────────
-    async def add_disco_saved_message(
-        self, user_id: int, guild_id: int, channel_id: int, disco_message_id: int,
+    # ── saved Archimedes answers (.arch save) ─────────────────────────────────────
+    async def add_archimedes_saved_message(
+        self, user_id: int, guild_id: int, channel_id: int, archimedes_message_id: int,
         trigger_message_id: int | None, prompt_text: str, response_text: str,
         jump_url: str,
     ) -> bool:
         status = await self.execute(
-            "INSERT INTO disco_saved_messages "
-            "(user_id, guild_id, channel_id, disco_message_id, trigger_message_id, "
+            "INSERT INTO archimedes_saved_messages "
+            "(user_id, guild_id, channel_id, archimedes_message_id, trigger_message_id, "
             " prompt_text, response_text, jump_url) "
             "VALUES ($1,$2,$3,$4,$5,$6,$7,$8) "
-            "ON CONFLICT (user_id, guild_id, disco_message_id) DO NOTHING",
-            int(user_id), int(guild_id), int(channel_id), int(disco_message_id),
+            "ON CONFLICT (user_id, guild_id, archimedes_message_id) DO NOTHING",
+            int(user_id), int(guild_id), int(channel_id), int(archimedes_message_id),
             trigger_message_id, prompt_text, response_text, jump_url,
         )
         return _rowcount(status) > 0
 
-    async def list_disco_saved_messages(
+    async def list_archimedes_saved_messages(
         self, user_id: int, guild_id: int,
     ) -> list[dict]:
         return await self.fetch_all(
             "SELECT *, EXTRACT(EPOCH FROM saved_at) AS saved_at "
-            "FROM disco_saved_messages WHERE user_id=$1 AND guild_id=$2 "
+            "FROM archimedes_saved_messages WHERE user_id=$1 AND guild_id=$2 "
             "ORDER BY saved_at ASC",
             int(user_id), int(guild_id),
         )
 
-    async def delete_disco_saved_message(
+    async def delete_archimedes_saved_message(
         self, user_id: int, guild_id: int, row_id: int,
     ) -> bool:
         status = await self.execute(
-            "DELETE FROM disco_saved_messages WHERE id=$1 AND user_id=$2 AND guild_id=$3",
+            "DELETE FROM archimedes_saved_messages WHERE id=$1 AND user_id=$2 AND guild_id=$3",
             int(row_id), int(user_id), int(guild_id),
         )
         return _rowcount(status) > 0

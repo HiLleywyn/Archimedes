@@ -42,7 +42,7 @@ class ChatContext:
     facts_block: str = ""
     channel_context: str = ""
     emoji_context: str = ""
-    persona_name: str = "Disco"
+    persona_name: str = "Archimedes"
     ai_prompts: dict = field(default_factory=dict)
     extra_blocks: list[str] = field(default_factory=list)
 
@@ -122,7 +122,7 @@ async def gather_chat_context(
         facts_block=facts_block,
         channel_context=channel_block,
         emoji_context=emoji_block,
-        persona_name=settings.get("ai_persona_name") or "Disco",
+        persona_name=settings.get("ai_persona_name") or "Archimedes",
         ai_prompts=ai_prompts,
     )
 
@@ -130,8 +130,8 @@ async def gather_chat_context(
 def build_system_prompt(ctx: ChatContext, *, base_prompt: str | None = None) -> str:
     """Compose the final system prompt string from a :class:`ChatContext`."""
     persona = (base_prompt or ctx.ai_prompts.get("chat") or DEFAULT_CHAT_PROMPT).strip()
-    if ctx.persona_name and ctx.persona_name != "Disco":
-        persona = persona.replace("You are Disco", f"You are {ctx.persona_name}", 1)
+    if ctx.persona_name and ctx.persona_name != "Archimedes":
+        persona = persona.replace("You are Archimedes", f"You are {ctx.persona_name}", 1)
 
     parts: list[str] = [persona, BASE_SYSTEM_INSTRUCTIONS]
 

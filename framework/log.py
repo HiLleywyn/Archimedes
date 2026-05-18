@@ -1,4 +1,4 @@
-"""framework/log.py -- logging setup for the Disco AI bot."""
+"""framework/log.py -- logging setup for the Archimedes bot."""
 from __future__ import annotations
 
 import logging
@@ -36,8 +36,8 @@ def setup_logging() -> None:
 
 def print_banner() -> None:
     """Log a short startup banner."""
-    log = logging.getLogger("discoai")
+    log = logging.getLogger("archimedes")
     log.info("=" * 56)
-    log.info("  Disco AI -- standalone AI chat bot")
+    log.info("  Archimedes -- standalone AI chat bot")
     log.info("  prefix=%s  backend=%s", Config.PREFIX, Config.CHAT_BACKEND)
     log.info("=" * 56)

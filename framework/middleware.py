@@ -5,7 +5,7 @@ Decorator stacking order on a command::
     @commands.command(name="foo")
     @guild_only
     @no_bots
-    async def foo(self, ctx: DiscoContext) -> None:
+    async def foo(self, ctx: ArchimedesContext) -> None:
 """
 from __future__ import annotations
 

@@ -18,7 +18,7 @@ _MODULES = [
     "ai.emoji_safety", "ai.safety", "ai.quota", "ai.client", "ai.models",
     "ai.prompts", "ai.redis_store", "ai.traits", "ai.memory", "ai.context",
     "ai.tools", "ai.training", "ai.lua_plugins", "ai.emoji_index",
-    "cogs.meta", "cogs.chat_views", "cogs.chat", "cogs.disco",
+    "cogs.meta", "cogs.chat_views", "cogs.chat", "cogs.archimedes",
     "cogs.ai_admin", "cogs.sidecar",
 ]
 
@@ -82,7 +82,7 @@ def test_system_prompt_assembly() -> None:
     prompt = build_system_prompt(ctx)
     assert "Sam" in prompt
     assert "hiking" in prompt
-    assert "Disco" in prompt
+    assert "Archimedes" in prompt
 
 
 def test_model_resolution_respects_backend() -> None:
@@ -95,17 +95,17 @@ def test_model_resolution_respects_backend() -> None:
 
 
 async def test_cogs_load_and_register_commands() -> None:
-    from framework.bot import DiscoAIBot
+    from framework.bot import ArchimedesBot
 
-    bot = DiscoAIBot()
+    bot = ArchimedesBot()
     try:
         for ext in (
-            "cogs.meta", "cogs.chat", "cogs.disco", "cogs.ai_admin", "cogs.sidecar",
+            "cogs.meta", "cogs.chat", "cogs.archimedes", "cogs.ai_admin", "cogs.sidecar",
         ):
             await bot.load_extension(ext)
         assert len(bot.cogs) == 5
         assert bot.get_command("ask") is not None
-        assert bot.get_command("disco") is not None
+        assert bot.get_command("archimedes") is not None
         assert bot.get_command("ai") is not None
     finally:
         for ext in list(bot.extensions):

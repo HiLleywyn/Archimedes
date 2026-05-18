@@ -1,4 +1,4 @@
-"""config.py -- runtime configuration for the Disco AI chat bot.
+"""config.py -- runtime configuration for the Archimedes chat bot.
 
 Every value is sourced from an environment variable so the bot stays
 twelve-factor and deploys cleanly on Railway / Docker. ``.env`` is loaded
@@ -46,7 +46,7 @@ class Config:
 
     # ── Discord ───────────────────────────────────────────────────────────────
     TOKEN: str = _env("DISCORD_TOKEN")
-    PREFIX: str = _env("PREFIX", ",")
+    PREFIX: str = _env("PREFIX", ".")
     OWNER_ID: int = _env_int("OWNER_ID", 0)
 
     # ── Storage ───────────────────────────────────────────────────────────────
@@ -61,7 +61,7 @@ class Config:
     OPENROUTER_TOOLS_MODEL: str = _env("OPENROUTER_TOOLS_MODEL")
     OPENROUTER_REASON_MODEL: str = _env("OPENROUTER_REASON_MODEL")
     OPENROUTER_REFERER: str = _env("OPENROUTER_REFERER", "https://github.com")
-    OPENROUTER_TITLE: str = _env("OPENROUTER_TITLE", "Disco AI")
+    OPENROUTER_TITLE: str = _env("OPENROUTER_TITLE", "Archimedes")
 
     # ── Local backend (Ollama) ────────────────────────────────────────────────
     OLLAMA_BASE_URL: str = _env("OLLAMA_BASE_URL")
@@ -78,7 +78,7 @@ class Config:
     AI_QUOTA_LIMIT: int = _env_int("AI_QUOTA_LIMIT", 25)
     AI_QUOTA_WINDOW: int = _env_int("AI_QUOTA_WINDOW", 3600)
     AI_COOLDOWN_S: float = _env_float("AI_COOLDOWN_S", 4.0)
-    PASSIVE_LEARNING: bool = _env_bool("DISCOAI_PASSIVE_LEARNING", False)
+    PASSIVE_LEARNING: bool = _env_bool("ARCHIMEDES_PASSIVE_LEARNING", False)
     AMBIENT_REPLIES: bool = _env_bool("AMBIENT_REPLIES", False)
 
     # ── Memory ────────────────────────────────────────────────────────────────

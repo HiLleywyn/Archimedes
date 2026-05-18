@@ -2,10 +2,10 @@
 
 Three background jobs:
 
-  * Passive listener -- in channels opted in with ``,ai memory listen on``,
+  * Passive listener -- in channels opted in with ``.ai memory listen on``,
     ambient messages are logged to ``channel_context`` (so the AI knows what
     a channel has been talking about) and as episodes for recall.
-  * Ambient chime-ins -- when enabled, Disco occasionally adds a one-liner
+  * Ambient chime-ins -- when enabled, Archimedes occasionally adds a one-liner
     to ongoing chatter in a passive channel.
   * Refresh loop -- every few hours, stale per-user memories are
     re-summarised and old trait events are pruned.
@@ -28,7 +28,7 @@ log = logging.getLogger(__name__)
 
 # Keep at most this many recent context rows per channel.
 _CHANNEL_CONTEXT_CAP = 40
-# Chance (per qualifying message) that Disco chimes in when ambient is on.
+# Chance (per qualifying message) that Archimedes chimes in when ambient is on.
 _AMBIENT_CHANCE = 0.04
 
 
@@ -49,7 +49,7 @@ class Sidecar(commands.Cog):
         if key in self._passive_cache:
             return self._passive_cache[key]
         row = await self.bot.db.fetch_val(
-            "SELECT 1 FROM disco_passive_channels WHERE guild_id=$1 AND channel_id=$2",
+            "SELECT 1 FROM archimedes_passive_channels WHERE guild_id=$1 AND channel_id=$2",
             guild_id, channel_id,
         )
         self._passive_cache[key] = bool(row)
@@ -69,7 +69,7 @@ class Sidecar(commands.Cog):
         if bot_user and bot_user.mentioned_in(message):
             return  # mentions are handled by the chat cog
         if message.reference and self.bot.is_ai_message(message.reference.message_id):
-            return  # replies to Disco are handled by the chat cog
+            return  # replies to Archimedes are handled by the chat cog
 
         if not Config.PASSIVE_LEARNING:
             return

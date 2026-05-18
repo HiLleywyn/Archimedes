@@ -1,7 +1,7 @@
 """cogs/chat.py -- the chat brain.
 
-Owns every conversational path: an @mention, a reply to one of Disco's
-answers, the ,ask command, and (optionally) ambient chime-ins. All four
+Owns every conversational path: an @mention, a reply to one of Archimedes's
+answers, the .ask command, and (optionally) ambient chime-ins. All four
 share one pipeline: gather context -> build the system prompt -> stream a
 tool-calling turn into a placeholder -> persist + learn.
 """
@@ -16,7 +16,7 @@ import discord
 from discord.ext import commands
 
 from config import Config
-from framework.context import DiscoContext
+from framework.context import ArchimedesContext
 from framework.middleware import guild_only, no_bots
 from ai.client import complete_default
 from ai.context import ChatMode, build_system_prompt, gather_chat_context
@@ -58,7 +58,7 @@ def _history_key(channel) -> str:
 
 
 class ChatBrain(commands.Cog):
-    """Handles mentions, replies, ,ask, and ambient chat."""
+    """Handles mentions, replies, .ask, and ambient chat."""
 
     def __init__(self, bot) -> None:
         self.bot = bot
@@ -104,7 +104,7 @@ class ChatBrain(commands.Cog):
         elif is_reply_to_ai:
             await self._handle(message, ChatMode.REPLY)
         elif self.bot.is_ai_thread(message.channel):
-            # Any message inside a thread Disco spawned continues the chat.
+            # Any message inside a thread Archimedes spawned continues the chat.
             await self._handle(message, ChatMode.REPLY)
 
     @commands.Cog.listener()
@@ -119,12 +119,12 @@ class ChatBrain(commands.Cog):
         if training is not None:
             await training.set_feedback(payload.channel_id, 1 if emoji == "👍" else -1)
 
-    # ── ,ask command ──────────────────────────────────────────────────────────
+    # ── .ask command ──────────────────────────────────────────────────────────
     @commands.command(name="ask")
     @guild_only
     @no_bots
-    async def ask_cmd(self, ctx: DiscoContext, *, question: str = "") -> None:
-        """Ask Disco a question. Reads your conversation history for context."""
+    async def ask_cmd(self, ctx: ArchimedesContext, *, question: str = "") -> None:
+        """Ask Archimedes a question. Reads your conversation history for context."""
         if not question.strip():
             await ctx.reply_error(f"Usage: `{ctx.prefix}ask <your question>`")
             return
@@ -195,13 +195,13 @@ class ChatBrain(commands.Cog):
         opted_out = await db.is_ai_opted_out(author.id, guild.id)
 
         # Decide where the reply lands: a fresh thread, the current thread,
-        # or inline. Threading honours the member's ,disco chat/threads pick.
+        # or inline. Threading honours the member's .arch chat/threads pick.
         threaded = await self._threaded(message, flags)
         thread = None
         if threaded and not isinstance(message.channel, discord.Thread):
             try:
                 thread = await message.create_thread(
-                    name=(question[:90] or "Disco chat"),
+                    name=(question[:90] or "Archimedes chat"),
                 )
                 self.bot.remember_ai_thread(thread.id)
             except (discord.HTTPException, AttributeError):
@@ -518,7 +518,7 @@ class ChatBrain(commands.Cog):
             return False
         if isinstance(message.channel, discord.Thread):
             return False
-        mode = await self.bot.db.get_disco_reply_mode(
+        mode = await self.bot.db.get_archimedes_reply_mode(
             message.author.id, message.guild.id,
         )
         return mode != "chat"

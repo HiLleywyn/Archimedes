@@ -12,7 +12,7 @@ definitions. Every definition needs:
 | `handler`     | function | `function(args)` returning a result table.   |
 
 Handlers run synchronously in a worker thread, so a slow plugin never
-blocks the bot. After adding or editing a file, run `,ai reloadtools`.
+blocks the bot. After adding or editing a file, run `.ai reloadtools`.
 
 Lua plugin support needs the optional `lupa` package (already in
 `requirements.txt`). When `lupa` is missing the loader simply logs a notice

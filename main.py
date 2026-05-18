@@ -1,4 +1,4 @@
-"""main.py -- entry point for the Disco AI chat bot.
+"""main.py -- entry point for the Archimedes chat bot.
 
 Validates configuration, wires SIGTERM/SIGINT to a graceful shutdown so a
 container redeploy drains cleanly, and retries with backoff when Discord
@@ -11,13 +11,13 @@ import logging
 import signal
 
 from config import Config
-from framework.bot import DiscoAIBot
+from framework.bot import ArchimedesBot
 from framework.log import print_banner, setup_logging
 
-log = logging.getLogger("discoai")
+log = logging.getLogger("archimedes")
 
 
-def _install_signal_handlers(bot: DiscoAIBot) -> None:
+def _install_signal_handlers(bot: ArchimedesBot) -> None:
     loop = asyncio.get_running_loop()
     triggered = False
 
@@ -49,7 +49,7 @@ async def main() -> None:
     max_retries = 5
     for attempt in range(max_retries):
         try:
-            async with DiscoAIBot() as bot:
+            async with ArchimedesBot() as bot:
                 _install_signal_handlers(bot)
                 await bot.start(Config.TOKEN)
             log.info("Bot exited cleanly.")

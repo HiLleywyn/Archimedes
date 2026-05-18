@@ -1,8 +1,4 @@
-# CI for the standalone Disco AI repository.
-#
-# This workflow is dormant while discoai-bot/ lives inside another repo
-# (GitHub only runs workflows from the repository root's .github/). Once
-# the folder is the root of its own repository, this activates automatically.
+# CI for the standalone Archimedes repository.
 name: CI
 
 on:

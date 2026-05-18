@@ -1,1 +1,1 @@
-"""Cog package for the Disco AI bot."""
+"""Cog package for the Archimedes bot."""

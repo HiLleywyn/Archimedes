@@ -1,15 +1,14 @@
-"""cogs/disco.py -- the player-facing ,disco command group.
+"""cogs/archimedes.py -- the player-facing .arch command group.
 
-Lets any member tune how Disco talks to them and inspect what it has
-learned. Prefix-only (no slash command). Unlike the original economy bot,
-there is no premium gate and no unlock requirement -- every command is
-open to everyone.
+Lets any member tune how Archimedes talks to them and inspect what it has
+learned. Prefix-only (no slash command). There is no premium gate and no
+unlock requirement -- every command is open to everyone.
 
-    ,disco                       -- help page
-    ,disco chat / threads        -- inline replies vs thread replies
-    ,disco ctx [@user|#channel|server|clear]
-    ,disco save / unsave / saved -- bookmark Disco answers
-    ,disco optin / optout        -- AI context tracking
+    .arch                       -- help page
+    .arch chat / threads        -- inline replies vs thread replies
+    .arch ctx [@user|#channel|server|clear]
+    .arch save / unsave / saved -- bookmark Archimedes answers
+    .arch optin / optout        -- AI context tracking
 """
 from __future__ import annotations
 
@@ -18,7 +17,7 @@ import logging
 import discord
 from discord.ext import commands
 
-from framework.context import DiscoContext
+from framework.context import ArchimedesContext
 from framework.embed import card
 from framework.middleware import guild_only, no_bots
 from framework.ui import C_INFO, C_PURPLE, clip, fmt_ts
@@ -28,93 +27,93 @@ from ai.memory import guild_scope, user_scope
 log = logging.getLogger(__name__)
 
 
-class Disco(commands.Cog):
-    """The ,disco command group: player-facing Disco AI controls."""
+class Archimedes(commands.Cog):
+    """The .arch command group: player-facing Archimedes controls."""
 
     def __init__(self, bot) -> None:
         self.bot = bot
 
-    @commands.group(name="disco", invoke_without_command=True)
+    @commands.group(name="arch", aliases=["a", "archimedes"], invoke_without_command=True)
     @guild_only
     @no_bots
-    async def disco(self, ctx: DiscoContext, *, _rest: str = "") -> None:
-        """Disco AI controls. Run ,disco for the full help page."""
+    async def archimedes(self, ctx: ArchimedesContext, *, _rest: str = "") -> None:
+        """Archimedes controls. Run .arch for the full help page."""
         await self._send_help(ctx)
 
-    async def _send_help(self, ctx: DiscoContext) -> None:
+    async def _send_help(self, ctx: ArchimedesContext) -> None:
         p = ctx.prefix
-        mode = await ctx.db.get_disco_reply_mode(ctx.author.id, ctx.guild_id)
+        mode = await ctx.db.get_archimedes_reply_mode(ctx.author.id, ctx.guild_id)
         b = (
             card(
-                "Disco AI",
+                "Archimedes",
                 color=C_INFO,
                 description=(
-                    "Disco answers `@`mentions and replies with a small, "
+                    "Archimedes answers `@`mentions and replies with a small, "
                     "memory-backed AI. These commands tune how it talks to you."
                 ),
             )
             .field(
                 "Talk style",
-                f"`{p}disco chat` -- Disco replies inline in-channel\n"
-                f"`{p}disco threads` -- Disco replies inside its own thread",
+                f"`{p}arch chat` -- Archimedes replies inline in-channel\n"
+                f"`{p}arch threads` -- Archimedes replies inside its own thread",
                 False,
             )
             .field(
                 "Context",
-                f"`{p}disco ctx` -- what Disco knows about you\n"
-                f"`{p}disco ctx @user` -- look up another member\n"
-                f"`{p}disco ctx server` -- server-wide context\n"
-                f"`{p}disco ctx clear` -- wipe what Disco learned about you",
+                f"`{p}arch ctx` -- what Archimedes knows about you\n"
+                f"`{p}arch ctx @user` -- look up another member\n"
+                f"`{p}arch ctx server` -- server-wide context\n"
+                f"`{p}arch ctx clear` -- wipe what Archimedes learned about you",
                 False,
             )
             .field(
                 "Saved answers",
-                f"`{p}disco save` -- reply to a Disco message to bookmark it\n"
-                f"`{p}disco saved [num]` -- browse your bookmarks\n"
-                f"`{p}disco unsave <num>` -- drop a bookmark",
+                f"`{p}arch save` -- reply to an Archimedes message to bookmark it\n"
+                f"`{p}arch saved [num]` -- browse your bookmarks\n"
+                f"`{p}arch unsave <num>` -- drop a bookmark",
                 False,
             )
             .field(
                 "Privacy",
-                f"`{p}disco optout` -- stop Disco learning about you\n"
-                f"`{p}disco optin` -- opt back in (everyone starts opted in)",
+                f"`{p}arch optout` -- stop Archimedes learning about you\n"
+                f"`{p}arch optin` -- opt back in (everyone starts opted in)",
                 False,
             )
             .field("Your reply mode", "inline chat" if mode == "chat" else "threads", True)
-            .footer("Disco AI -- prefix-only command group")
+            .footer(f"Prefix-only. Use {p}arch, {p}a, or {p}archimedes.")
         )
         await ctx.reply(embed=b.build(), mention_author=False)
 
     # ── reply mode ────────────────────────────────────────────────────────────
-    @disco.command(name="chat")
+    @archimedes.command(name="chat")
     @guild_only
     @no_bots
-    async def disco_chat(self, ctx: DiscoContext) -> None:
-        """Switch Disco to inline in-channel replies instead of threads."""
-        await ctx.db.set_disco_reply_mode(ctx.author.id, ctx.guild_id, "chat")
+    async def archimedes_chat(self, ctx: ArchimedesContext) -> None:
+        """Switch Archimedes to inline in-channel replies instead of threads."""
+        await ctx.db.set_archimedes_reply_mode(ctx.author.id, ctx.guild_id, "chat")
         await ctx.reply_success(
-            "Disco will now answer you with a normal in-channel reply. "
-            "Switch back any time with `,disco threads`.",
+            "Archimedes will now answer you with a normal in-channel reply. "
+            "Switch back any time with `.arch threads`.",
             title="Reply mode: inline chat",
         )
 
-    @disco.command(name="threads", aliases=["thread"])
+    @archimedes.command(name="threads", aliases=["thread"])
     @guild_only
     @no_bots
-    async def disco_threads(self, ctx: DiscoContext) -> None:
-        """Switch Disco back to replying inside its own thread."""
-        await ctx.db.set_disco_reply_mode(ctx.author.id, ctx.guild_id, "thread")
+    async def archimedes_threads(self, ctx: ArchimedesContext) -> None:
+        """Switch Archimedes back to replying inside its own thread."""
+        await ctx.db.set_archimedes_reply_mode(ctx.author.id, ctx.guild_id, "thread")
         await ctx.reply_success(
-            "Disco will now answer you inside its own thread to keep channels "
-            "tidy. Switch to inline replies any time with `,disco chat`.",
+            "Archimedes will now answer you inside its own thread to keep channels "
+            "tidy. Switch to inline replies any time with `.arch chat`.",
             title="Reply mode: threads",
         )
 
     # ── context inspector ─────────────────────────────────────────────────────
-    @disco.command(name="ctx", aliases=["context"])
+    @archimedes.command(name="ctx", aliases=["context"])
     @guild_only
     @no_bots
-    async def disco_ctx(self, ctx: DiscoContext, *, target: str = "") -> None:
+    async def archimedes_ctx(self, ctx: ArchimedesContext, *, target: str = "") -> None:
         """Inspect AI context: yours, a member's, or the server's."""
         low = target.strip().lower()
 
@@ -122,9 +121,9 @@ class Disco(commands.Cog):
             deleted = await ctx.db.wipe_ai_user_state(ctx.author.id, ctx.guild_id)
             n = sum(deleted.values())
             await ctx.reply_success(
-                f"Wiped what Disco had learned about you here ({n} row(s)) -- "
+                f"Wiped what Archimedes had learned about you here ({n} row(s)) -- "
                 "memory, traits, conversation history and your personal facts.",
-                title="Your Disco context cleared",
+                title="Your Archimedes context cleared",
             )
             return
 
@@ -136,7 +135,7 @@ class Disco(commands.Cog):
         member = mentioned[0] if mentioned else ctx.author
         await self._show_user_ctx(ctx, member)
 
-    async def _show_user_ctx(self, ctx: DiscoContext, member: discord.abc.User) -> None:
+    async def _show_user_ctx(self, ctx: ArchimedesContext, member: discord.abc.User) -> None:
         db = ctx.db
         memory = await db.get_ai_user_memory(member.id, ctx.guild_id)
         traits = await trait_engine.get_traits(db, member.id, ctx.guild_id)
@@ -146,11 +145,11 @@ class Disco(commands.Cog):
             member.id, ctx.guild_id,
         )
         facts = await db.fetch_all(
-            "SELECT key, value FROM disco_facts WHERE scope=$1 ORDER BY updated_at DESC LIMIT 10",
+            "SELECT key, value FROM archimedes_facts WHERE scope=$1 ORDER BY updated_at DESC LIMIT 10",
             user_scope(member.id, ctx.guild_id),
         )
 
-        b = card(f"Disco context -- {member.display_name}", color=C_PURPLE)
+        b = card(f"Archimedes context -- {member.display_name}", color=C_PURPLE)
         b = b.thumbnail(member.display_avatar.url)
         b = b.field("Memory", clip(memory or "(nothing learned yet)", 1024), False)
         if traits:
@@ -168,20 +167,20 @@ class Disco(commands.Cog):
             b = b.field("Remembered facts", clip(fact_lines, 1024), False)
         b = b.field("Stored messages", str(int(history_n or 0)), True)
         b = b.field("AI tracking", "opted OUT" if opted_out else "active", True)
-        b = b.footer("Also: ,disco ctx server / clear")
+        b = b.footer("Also: .arch ctx server / clear")
         await ctx.reply(embed=b.build(), mention_author=False)
 
-    async def _show_server_ctx(self, ctx: DiscoContext) -> None:
+    async def _show_server_ctx(self, ctx: ArchimedesContext) -> None:
         db = ctx.db
         gid = ctx.guild_id
         facts = await db.fetch_all(
-            "SELECT key, value FROM disco_facts WHERE scope=$1 "
+            "SELECT key, value FROM archimedes_facts WHERE scope=$1 "
             "ORDER BY updated_at DESC LIMIT 12",
             guild_scope(gid),
         )
         episodes = await db.fetch_all(
             "SELECT summary, EXTRACT(EPOCH FROM created_at) AS created_at "
-            "FROM disco_episodes WHERE scope=$1 ORDER BY created_at DESC LIMIT 8",
+            "FROM archimedes_episodes WHERE scope=$1 ORDER BY created_at DESC LIMIT 8",
             guild_scope(gid),
         )
         optouts = await db.fetch_val(
@@ -191,7 +190,7 @@ class Disco(commands.Cog):
             "SELECT COUNT(DISTINCT user_id) FROM ai_user_memory WHERE guild_id=$1", gid,
         )
 
-        b = card(f"Disco server context -- {ctx.guild.name}", color=C_INFO)
+        b = card(f"Archimedes server context -- {ctx.guild.name}", color=C_INFO)
         if facts:
             fact_lines = "\n".join(
                 f"`{f['key']}`: {clip(f['value'], 90)}" for f in facts
@@ -212,12 +211,12 @@ class Disco(commands.Cog):
         await ctx.reply(embed=b.build(), mention_author=False)
 
     # ── saved answers ─────────────────────────────────────────────────────────
-    def _is_disco_message(self, msg: discord.Message | None) -> bool:
+    def _is_archimedes_message(self, msg: discord.Message | None) -> bool:
         if msg is None or self.bot.user is None:
             return False
         return msg.author.id == self.bot.user.id and bool((msg.content or "").strip())
 
-    async def _resolve_referenced(self, ctx: DiscoContext) -> discord.Message | None:
+    async def _resolve_referenced(self, ctx: ArchimedesContext) -> discord.Message | None:
         ref = ctx.message.reference
         if ref is None:
             return None
@@ -230,55 +229,55 @@ class Disco(commands.Cog):
                 return None
         return None
 
-    @disco.command(name="save")
+    @archimedes.command(name="save")
     @guild_only
     @no_bots
-    async def disco_save(self, ctx: DiscoContext) -> None:
-        """Bookmark a Disco answer. Run this as a reply to one of its messages."""
-        disco_msg = await self._resolve_referenced(ctx)
-        if not self._is_disco_message(disco_msg):
+    async def archimedes_save(self, ctx: ArchimedesContext) -> None:
+        """Bookmark an Archimedes answer. Run this as a reply to one of its messages."""
+        archimedes_msg = await self._resolve_referenced(ctx)
+        if not self._is_archimedes_message(archimedes_msg):
             await ctx.reply_error(
-                "Reply to one of Disco's messages with `,disco save` to bookmark it."
+                "Reply to one of Archimedes's messages with `.arch save` to bookmark it."
             )
             return
         trigger = None
         try:
-            async for m in disco_msg.channel.history(limit=12, before=disco_msg):
+            async for m in archimedes_msg.channel.history(limit=12, before=archimedes_msg):
                 if not m.author.bot and (m.content or "").strip():
                     trigger = m
                     break
         except discord.HTTPException:
             pass
         prompt_text = (trigger.content.strip() if trigger else "") or "(original not found)"
-        saved = await ctx.db.add_disco_saved_message(
-            ctx.author.id, ctx.guild_id, disco_msg.channel.id, disco_msg.id,
+        saved = await ctx.db.add_archimedes_saved_message(
+            ctx.author.id, ctx.guild_id, archimedes_msg.channel.id, archimedes_msg.id,
             trigger.id if trigger else None,
-            clip(prompt_text, 1500), clip(disco_msg.content or "", 3000),
-            disco_msg.jump_url,
+            clip(prompt_text, 1500), clip(archimedes_msg.content or "", 3000),
+            archimedes_msg.jump_url,
         )
         if not saved:
-            await ctx.reply_error("You've already saved that answer. See `,disco saved`.")
+            await ctx.reply_error("You've already saved that answer. See `.arch saved`.")
             return
         await ctx.reply_success(
-            "Bookmarked that exchange. View it with `,disco saved`.",
-            title="Disco answer saved",
+            "Bookmarked that exchange. View it with `.arch saved`.",
+            title="Archimedes answer saved",
         )
 
-    @disco.command(name="unsave")
+    @archimedes.command(name="unsave")
     @guild_only
     @no_bots
-    async def disco_unsave(self, ctx: DiscoContext, index: int | None = None) -> None:
-        """Drop a bookmarked Disco answer by its number."""
-        rows = await ctx.db.list_disco_saved_messages(ctx.author.id, ctx.guild_id)
+    async def archimedes_unsave(self, ctx: ArchimedesContext, index: int | None = None) -> None:
+        """Drop a bookmarked Archimedes answer by its number."""
+        rows = await ctx.db.list_archimedes_saved_messages(ctx.author.id, ctx.guild_id)
         if not rows:
-            await ctx.reply_error("You have no saved Disco answers.")
+            await ctx.reply_error("You have no saved Archimedes answers.")
             return
         if index is None or index < 0 or index >= len(rows):
             await ctx.reply_error(
-                f"Give a number 0-{len(rows) - 1}: `,disco unsave <num>`."
+                f"Give a number 0-{len(rows) - 1}: `.arch unsave <num>`."
             )
             return
-        ok = await ctx.db.delete_disco_saved_message(
+        ok = await ctx.db.delete_archimedes_saved_message(
             ctx.author.id, ctx.guild_id, int(rows[index]["id"]),
         )
         if not ok:
@@ -286,16 +285,16 @@ class Disco(commands.Cog):
             return
         await ctx.reply_success("Removed that answer.", title="Bookmark dropped")
 
-    @disco.command(name="saved")
+    @archimedes.command(name="saved")
     @guild_only
     @no_bots
-    async def disco_saved(self, ctx: DiscoContext, index: int | None = None) -> None:
-        """Browse your bookmarked Disco answers, or open one by number."""
-        rows = await ctx.db.list_disco_saved_messages(ctx.author.id, ctx.guild_id)
+    async def archimedes_saved(self, ctx: ArchimedesContext, index: int | None = None) -> None:
+        """Browse your bookmarked Archimedes answers, or open one by number."""
+        rows = await ctx.db.list_archimedes_saved_messages(ctx.author.id, ctx.guild_id)
         if not rows:
             await ctx.reply_error(
-                "You haven't saved any answers. Reply to a Disco message "
-                "with `,disco save`."
+                "You haven't saved any answers. Reply to an Archimedes message "
+                "with `.arch save`."
             )
             return
         if index is not None:
@@ -311,48 +310,48 @@ class Disco(commands.Cog):
         await ctx.paginate(pages)
 
     def _saved_embed(self, row: dict, index: int, total: int) -> discord.Embed:
-        b = card(f"Saved Disco answer #{index}", color=C_PURPLE)
+        b = card(f"Saved Archimedes answer #{index}", color=C_PURPLE)
         b = b.field("Your question", clip(row.get("prompt_text") or "(unavailable)", 1024), False)
-        b = b.field("Disco's answer", clip(row.get("response_text") or "(empty)", 1024), False)
+        b = b.field("Archimedes's answer", clip(row.get("response_text") or "(empty)", 1024), False)
         b = b.field("Saved", fmt_ts(row.get("saved_at")), True)
         if row.get("jump_url"):
             b = b.field("Jump", f"[Open in chat]({row['jump_url']})", True)
-        b = b.footer(f"{index + 1} of {total}  -  ,disco unsave {index} to remove")
+        b = b.footer(f"{index + 1} of {total}  -  .arch unsave {index} to remove")
         return b.build()
 
     # ── privacy ───────────────────────────────────────────────────────────────
-    @disco.command(name="optout")
+    @archimedes.command(name="optout")
     @guild_only
     @no_bots
-    async def disco_optout(self, ctx: DiscoContext) -> None:
-        """Opt out of AI context tracking. Disco forgets what it knows about you."""
+    async def archimedes_optout(self, ctx: ArchimedesContext) -> None:
+        """Opt out of AI context tracking. Archimedes forgets what it knows about you."""
         if await ctx.db.is_ai_opted_out(ctx.author.id, ctx.guild_id):
             await ctx.reply_error_hint(
                 "You're already opted out.",
-                hint=f"Use {ctx.prefix}disco optin to re-enable memory.",
+                hint=f"Use {ctx.prefix}arch optin to re-enable memory.",
             )
             return
         await ctx.db.set_ai_opt_out(ctx.author.id, ctx.guild_id)
         await ctx.reply_success(
-            "Wiped your AI memory, history and learned traits. Disco no longer "
-            f"remembers anything about you here. Reverse with `{ctx.prefix}disco optin`.",
+            "Wiped your AI memory, history and learned traits. Archimedes no longer "
+            f"remembers anything about you here. Reverse with `{ctx.prefix}arch optin`.",
             title="Opted out of AI context",
         )
 
-    @disco.command(name="optin")
+    @archimedes.command(name="optin")
     @guild_only
     @no_bots
-    async def disco_optin(self, ctx: DiscoContext) -> None:
+    async def archimedes_optin(self, ctx: ArchimedesContext) -> None:
         """Opt back in to AI context tracking."""
         if not await ctx.db.is_ai_opted_out(ctx.author.id, ctx.guild_id):
             await ctx.reply_error("You weren't opted out.")
             return
         await ctx.db.clear_ai_opt_out(ctx.author.id, ctx.guild_id)
         await ctx.reply_success(
-            "Welcome back. Disco will start learning about you again from here on.",
+            "Welcome back. Archimedes will start learning about you again from here on.",
             title="Opted in to AI context",
         )
 
 
 async def setup(bot) -> None:
-    await bot.add_cog(Disco(bot))
+    await bot.add_cog(Archimedes(bot))

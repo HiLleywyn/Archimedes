@@ -1,4 +1,4 @@
-"""cogs/ai_admin.py -- the ,ai staff control surface.
+"""cogs/ai_admin.py -- the .ai staff control surface.
 
 One place for operators to tune the bot: feature flags, system prompts,
 persona, the per-guild model picker, web-search backend, the agent tool
@@ -17,7 +17,7 @@ from framework.audit import (
     SCOPE_AI, SEVERITY_DANGER, SEVERITY_WARN,
     log_staff_action, recent_staff_actions,
 )
-from framework.context import DiscoContext
+from framework.context import ArchimedesContext
 from framework.embed import card
 from framework.middleware import guild_only, require_manage_guild
 from framework.ui import (
@@ -66,7 +66,7 @@ class AIAdmin(commands.Cog):
 
         return {
             "Overview": [page("AI Control Surface", [
-                f"`{p}ai` is the one place to configure Disco AI.",
+                f"`{p}ai` is the one place to configure Archimedes.",
                 "",
                 "Config -- flags, prompts, persona, history",
                 "Models -- per-guild model picker",
@@ -129,20 +129,20 @@ class AIAdmin(commands.Cog):
 
     @commands.group(name="ai", invoke_without_command=True)
     @guild_only
-    async def ai(self, ctx: DiscoContext) -> None:
-        """AI control surface. Run ,ai help for the full reference."""
+    async def ai(self, ctx: ArchimedesContext) -> None:
+        """AI control surface. Run .ai help for the full reference."""
         await CategoryPaginator.send(ctx, self._help_categories(ctx.prefix))
 
     @ai.command(name="help")
     @guild_only
-    async def ai_help(self, ctx: DiscoContext) -> None:
-        """Full ,ai command reference."""
+    async def ai_help(self, ctx: ArchimedesContext) -> None:
+        """Full .ai command reference."""
         await CategoryPaginator.send(ctx, self._help_categories(ctx.prefix))
 
     # ── config ────────────────────────────────────────────────────────────────
     @ai.command(name="status")
     @guild_only
-    async def ai_status(self, ctx: DiscoContext) -> None:
+    async def ai_status(self, ctx: ArchimedesContext) -> None:
         """Show feature flags and provider status."""
         flags = await ctx.db.get_ai_flags(ctx.guild_id)
         chat_model = await resolve_model(ctx.db, ctx.guild_id, "chat")
@@ -158,7 +158,7 @@ class AIAdmin(commands.Cog):
     @ai.command(name="toggle")
     @guild_only
     @require_manage_guild
-    async def ai_toggle(self, ctx: DiscoContext, feature: str) -> None:
+    async def ai_toggle(self, ctx: ArchimedesContext, feature: str) -> None:
         """Toggle an AI feature flag on/off."""
         key = (feature or "").strip().lower()
         col = _AI_FLAGS.get(key)
@@ -177,11 +177,11 @@ class AIAdmin(commands.Cog):
     @ai.command(name="test")
     @guild_only
     @require_manage_guild
-    async def ai_test(self, ctx: DiscoContext) -> None:
+    async def ai_test(self, ctx: ArchimedesContext) -> None:
         """Send a test prompt to the model provider."""
         result = await complete_default(
             [
-                {"role": "system", "content": "You are Disco, a Discord companion."},
+                {"role": "system", "content": "You are Archimedes, a Discord companion."},
                 {"role": "user", "content": "Say 'AI is working' in one short sentence."},
             ],
             max_tokens=40,
@@ -194,7 +194,7 @@ class AIAdmin(commands.Cog):
     @ai.command(name="prompt")
     @guild_only
     @require_manage_guild
-    async def ai_prompt(self, ctx: DiscoContext, feature: str, *, prompt: str = "") -> None:
+    async def ai_prompt(self, ctx: ArchimedesContext, feature: str, *, prompt: str = "") -> None:
         """Set or reset a custom system prompt for a feature."""
         feat = (feature or "").strip().lower()
         col = _PROMPT_FEATURES.get(feat)
@@ -216,7 +216,7 @@ class AIAdmin(commands.Cog):
     @ai.command(name="persona")
     @guild_only
     @require_manage_guild
-    async def ai_persona(self, ctx: DiscoContext, *, name: str = "") -> None:
+    async def ai_persona(self, ctx: ArchimedesContext, *, name: str = "") -> None:
         """Set or reset the AI persona display name."""
         value = (name or "").strip() or None
         await ctx.db.update_guild_setting(ctx.guild_id, "ai_persona_name", value)
@@ -228,7 +228,7 @@ class AIAdmin(commands.Cog):
     @ai.command(name="clearhistory")
     @guild_only
     @require_manage_guild
-    async def ai_clearhistory(self, ctx: DiscoContext, member: discord.Member | None = None) -> None:
+    async def ai_clearhistory(self, ctx: ArchimedesContext, member: discord.Member | None = None) -> None:
         """Wipe AI conversation history for a member or the whole server."""
         if member is not None:
             n = await ctx.db.clear_ai_conversation(member.id, ctx.guild_id)
@@ -246,7 +246,7 @@ class AIAdmin(commands.Cog):
 
     @ai.command(name="forget", aliases=["forgetme"])
     @guild_only
-    async def ai_forget(self, ctx: DiscoContext) -> None:
+    async def ai_forget(self, ctx: ArchimedesContext) -> None:
         """Wipe only YOUR stored memory in this server."""
         cleared = await ctx.db.clear_ai_user_memory(ctx.author.id, ctx.guild_id)
         await ctx.reply_success(
@@ -257,8 +257,8 @@ class AIAdmin(commands.Cog):
 
     @ai.command(name="recontext", aliases=["rebuild"])
     @guild_only
-    async def ai_recontext(self, ctx: DiscoContext, target: str | None = None) -> None:
-        """Rebuild Disco's context. No arg = you; @user/server/channel need Manage Server."""
+    async def ai_recontext(self, ctx: ArchimedesContext, target: str | None = None) -> None:
+        """Rebuild Archimedes's context. No arg = you; @user/server/channel need Manage Server."""
         scope = "user"
         member = None
         if target:
@@ -282,7 +282,7 @@ class AIAdmin(commands.Cog):
             return
 
         if scope == "server":
-            if not await ctx.confirm("Wipe ALL Disco AI memory for this server?"):
+            if not await ctx.confirm("Wipe ALL Archimedes memory for this server?"):
                 await ctx.reply_error("Cancelled.")
                 return
             deleted = await ctx.db.wipe_ai_guild_state(ctx.guild_id)
@@ -311,13 +311,13 @@ class AIAdmin(commands.Cog):
     # ── model picker ──────────────────────────────────────────────────────────
     @ai.group(name="model", invoke_without_command=True)
     @guild_only
-    async def ai_model(self, ctx: DiscoContext) -> None:
+    async def ai_model(self, ctx: ArchimedesContext) -> None:
         """Per-guild model defaults. Subcommands: list, show, set, reset."""
         await self.ai_model_list(ctx)
 
     @ai_model.command(name="list")
     @guild_only
-    async def ai_model_list(self, ctx: DiscoContext) -> None:
+    async def ai_model_list(self, ctx: ArchimedesContext) -> None:
         """Show per-category model defaults."""
         picks = await list_guild_defaults(ctx.db, ctx.guild_id)
         b = card("AI Model Defaults", color=C_PURPLE)
@@ -325,12 +325,12 @@ class AIAdmin(commands.Cog):
             pick = picks.get(cat.key)
             current = f"{pick.provider}:{pick.model}" if pick else "env default"
             b.field(cat.label, current, True)
-        b.footer("Use ,ai model set <category> <provider:model|index>")
+        b.footer("Use .ai model set <category> <provider:model|index>")
         await ctx.reply(embed=b.build(), mention_author=False)
 
     @ai_model.command(name="show")
     @guild_only
-    async def ai_model_show(self, ctx: DiscoContext, category: str) -> None:
+    async def ai_model_show(self, ctx: ArchimedesContext, category: str) -> None:
         """Show the curated catalog for one category."""
         cat = get_category((category or "").strip().lower())
         if cat is None:
@@ -344,13 +344,13 @@ class AIAdmin(commands.Cog):
         ] or ["(no curated entries)"]
         b = card(f"Catalog -- {cat.label}", color=C_PURPLE, description="\n".join(lines))
         b.field("Effective now", f"`{effective.provider}:{effective.model}`", False)
-        b.footer(f"Use ,ai model set {cat.key} <index|provider:model>")
+        b.footer(f"Use .ai model set {cat.key} <index|provider:model>")
         await ctx.reply(embed=b.build(), mention_author=False)
 
     @ai_model.command(name="set")
     @guild_only
     @require_manage_guild
-    async def ai_model_set(self, ctx: DiscoContext, category: str, *, value: str) -> None:
+    async def ai_model_set(self, ctx: ArchimedesContext, category: str, *, value: str) -> None:
         """Set a per-guild model default for a category."""
         cat = get_category((category or "").strip().lower())
         if cat is None:
@@ -386,7 +386,7 @@ class AIAdmin(commands.Cog):
     @ai_model.command(name="reset")
     @guild_only
     @require_manage_guild
-    async def ai_model_reset(self, ctx: DiscoContext, category: str) -> None:
+    async def ai_model_reset(self, ctx: ArchimedesContext, category: str) -> None:
         """Revert a category to the env default."""
         cat = get_category((category or "").strip().lower())
         if cat is None:
@@ -398,13 +398,13 @@ class AIAdmin(commands.Cog):
     # ── web search ────────────────────────────────────────────────────────────
     @ai.group(name="websearch", invoke_without_command=True)
     @guild_only
-    async def ai_websearch(self, ctx: DiscoContext) -> None:
+    async def ai_websearch(self, ctx: ArchimedesContext) -> None:
         """Web search backend config."""
         await self.ai_websearch_status(ctx)
 
     @ai_websearch.command(name="status")
     @guild_only
-    async def ai_websearch_status(self, ctx: DiscoContext) -> None:
+    async def ai_websearch_status(self, ctx: ArchimedesContext) -> None:
         """Show the current web search backend."""
         settings = await ctx.db.get_guild_settings(ctx.guild_id)
         guild_backend = settings.get("search_backend")
@@ -419,7 +419,7 @@ class AIAdmin(commands.Cog):
     @ai_websearch.command(name="backend")
     @guild_only
     @require_manage_guild
-    async def ai_websearch_backend(self, ctx: DiscoContext, backend: str) -> None:
+    async def ai_websearch_backend(self, ctx: ArchimedesContext, backend: str) -> None:
         """Set the web search backend (ddg|brave)."""
         val = (backend or "").strip().lower()
         if val not in _SEARCH_BACKENDS:
@@ -434,7 +434,7 @@ class AIAdmin(commands.Cog):
     @ai_websearch.command(name="reset")
     @guild_only
     @require_manage_guild
-    async def ai_websearch_reset(self, ctx: DiscoContext) -> None:
+    async def ai_websearch_reset(self, ctx: ArchimedesContext) -> None:
         """Revert the search backend to the env default."""
         await ctx.db.update_guild_setting(ctx.guild_id, "search_backend", None)
         await ctx.reply_success("Search backend reset to env default.", title="Web Search")
@@ -442,13 +442,13 @@ class AIAdmin(commands.Cog):
     # ── tools ─────────────────────────────────────────────────────────────────
     @ai.group(name="tools", invoke_without_command=True)
     @guild_only
-    async def ai_tools(self, ctx: DiscoContext) -> None:
+    async def ai_tools(self, ctx: ArchimedesContext) -> None:
         """Agent tool registry."""
         await self.ai_tools_list(ctx)
 
     @ai_tools.command(name="list")
     @guild_only
-    async def ai_tools_list(self, ctx: DiscoContext) -> None:
+    async def ai_tools_list(self, ctx: ArchimedesContext) -> None:
         """List every registered agent tool."""
         registry = self.bot.tools
         specs = sorted(registry.all(), key=lambda s: s.name)
@@ -466,7 +466,7 @@ class AIAdmin(commands.Cog):
 
     @ai_tools.command(name="info")
     @guild_only
-    async def ai_tools_info(self, ctx: DiscoContext, *, name: str) -> None:
+    async def ai_tools_info(self, ctx: ArchimedesContext, *, name: str) -> None:
         """Show the full schema for one tool."""
         spec = self.bot.tools.get((name or "").strip())
         if spec is None:
@@ -485,7 +485,7 @@ class AIAdmin(commands.Cog):
     @ai_tools.command(name="enable")
     @guild_only
     @require_manage_guild
-    async def ai_tools_enable(self, ctx: DiscoContext, *, name: str) -> None:
+    async def ai_tools_enable(self, ctx: ArchimedesContext, *, name: str) -> None:
         """Enable a tool."""
         if self.bot.tools.get(name.strip()) is None:
             await ctx.reply_error(f"Tool `{name}` not found.")
@@ -496,7 +496,7 @@ class AIAdmin(commands.Cog):
     @ai_tools.command(name="disable")
     @guild_only
     @require_manage_guild
-    async def ai_tools_disable(self, ctx: DiscoContext, *, name: str) -> None:
+    async def ai_tools_disable(self, ctx: ArchimedesContext, *, name: str) -> None:
         """Disable a tool."""
         if self.bot.tools.get(name.strip()) is None:
             await ctx.reply_error(f"Tool `{name}` not found.")
@@ -506,13 +506,13 @@ class AIAdmin(commands.Cog):
 
     @ai.command(name="plugins")
     @guild_only
-    async def ai_plugins(self, ctx: DiscoContext) -> None:
+    async def ai_plugins(self, ctx: ArchimedesContext) -> None:
         """List tools registered by Lua plugins."""
         plugin_tools = self.bot.tools.by_category("plugin")
         b = card("Lua Plugins", color=C_PURPLE)
         if not plugin_tools:
             b.description("No Lua plugin tools loaded. Drop .lua files in plugins/ "
-                          "and run ,ai reloadtools.")
+                          "and run .ai reloadtools.")
         else:
             b.description("\n".join(f"`{t.name}` -- {clip(t.description, 70)}"
                                     for t in plugin_tools))
@@ -521,7 +521,7 @@ class AIAdmin(commands.Cog):
     @ai.command(name="reloadtools")
     @guild_only
     @require_manage_guild
-    async def ai_reloadtools(self, ctx: DiscoContext) -> None:
+    async def ai_reloadtools(self, ctx: ArchimedesContext) -> None:
         """Rebuild the tool registry and reload Lua plugins."""
         from ai.lua_plugins import load_plugins
         from ai.tools import build_default_registry
@@ -542,7 +542,7 @@ class AIAdmin(commands.Cog):
     # ── memory ────────────────────────────────────────────────────────────────
     @ai.group(name="memory", aliases=["mem"], invoke_without_command=True)
     @guild_only
-    async def ai_memory(self, ctx: DiscoContext) -> None:
+    async def ai_memory(self, ctx: ArchimedesContext) -> None:
         """Memory sidecar controls."""
         p = ctx.prefix
         await ctx.reply(
@@ -557,7 +557,7 @@ class AIAdmin(commands.Cog):
 
     @ai_memory.command(name="facts")
     @guild_only
-    async def ai_memory_facts(self, ctx: DiscoContext, *, scope: str | None = None) -> None:
+    async def ai_memory_facts(self, ctx: ArchimedesContext, *, scope: str | None = None) -> None:
         """List long-term facts for a scope (defaults to this guild)."""
         target = scope or guild_scope(ctx.guild_id)
         facts = await self.bot.memory.get_facts(target, limit=20)
@@ -577,7 +577,7 @@ class AIAdmin(commands.Cog):
     @guild_only
     @require_manage_guild
     async def ai_memory_remember(
-        self, ctx: DiscoContext, scope: str, key: str, *, value: str,
+        self, ctx: ArchimedesContext, scope: str, key: str, *, value: str,
     ) -> None:
         """Manually add or overwrite a fact. scope = guild | user:<id>."""
         target = self._resolve_scope(ctx, scope)
@@ -587,37 +587,37 @@ class AIAdmin(commands.Cog):
     @ai_memory.command(name="forget")
     @guild_only
     @require_manage_guild
-    async def ai_memory_forget(self, ctx: DiscoContext, scope: str, *, key: str) -> None:
+    async def ai_memory_forget(self, ctx: ArchimedesContext, scope: str, *, key: str) -> None:
         """Delete a fact by scope and key."""
         target = self._resolve_scope(ctx, scope)
         status = await ctx.db.execute(
-            "DELETE FROM disco_facts WHERE scope=$1 AND key=$2", target, key,
+            "DELETE FROM archimedes_facts WHERE scope=$1 AND key=$2", target, key,
         )
         await ctx.reply_success(f"Removed `{key}` from `{target}` ({status}).", title="Fact removed")
 
     @ai_memory.command(name="listen")
     @guild_only
     @require_manage_guild
-    async def ai_memory_listen(self, ctx: DiscoContext, setting: str) -> None:
+    async def ai_memory_listen(self, ctx: ArchimedesContext, setting: str) -> None:
         """Toggle passive episode capture in this channel (on|off)."""
         val = (setting or "").strip().lower()
         if val in ("on", "enable", "true", "1"):
             await ctx.db.execute(
-                "INSERT INTO disco_passive_channels (guild_id, channel_id, enabled_by) "
+                "INSERT INTO archimedes_passive_channels (guild_id, channel_id, enabled_by) "
                 "VALUES ($1,$2,$3) ON CONFLICT DO NOTHING",
                 ctx.guild_id, ctx.channel.id, ctx.author.id,
             )
             await ctx.reply_success("Passive capture is now ON in this channel.", title="Listening")
         elif val in ("off", "disable", "false", "0"):
             await ctx.db.execute(
-                "DELETE FROM disco_passive_channels WHERE guild_id=$1 AND channel_id=$2",
+                "DELETE FROM archimedes_passive_channels WHERE guild_id=$1 AND channel_id=$2",
                 ctx.guild_id, ctx.channel.id,
             )
             await ctx.reply_success("Passive capture is now OFF in this channel.", title="Silent")
         else:
             await ctx.reply_error("Use `on` or `off`.")
 
-    def _resolve_scope(self, ctx: DiscoContext, scope: str) -> str:
+    def _resolve_scope(self, ctx: ArchimedesContext, scope: str) -> str:
         low = (scope or "").strip().lower()
         if low in ("guild", "server"):
             return guild_scope(ctx.guild_id)
@@ -631,13 +631,13 @@ class AIAdmin(commands.Cog):
     # ── emoji index ───────────────────────────────────────────────────────────
     @ai.group(name="emojis", invoke_without_command=True)
     @guild_only
-    async def ai_emojis(self, ctx: DiscoContext) -> None:
+    async def ai_emojis(self, ctx: ArchimedesContext) -> None:
         """Custom emoji meaning index."""
         await self.ai_emojis_stats(ctx)
 
     @ai_emojis.command(name="stats")
     @guild_only
-    async def ai_emojis_stats(self, ctx: DiscoContext) -> None:
+    async def ai_emojis_stats(self, ctx: ArchimedesContext) -> None:
         """Show index coverage."""
         from ai.emoji_index import DEFAULT_MAX_AGE_DAYS
 
@@ -654,7 +654,7 @@ class AIAdmin(commands.Cog):
     @ai_emojis.command(name="index")
     @guild_only
     @require_manage_guild
-    async def ai_emojis_index(self, ctx: DiscoContext, flag: str | None = None) -> None:
+    async def ai_emojis_index(self, ctx: ArchimedesContext, flag: str | None = None) -> None:
         """Index this server's custom emojis (pass 'force' to re-index all)."""
         from ai.emoji_index import DEFAULT_MAX_AGE_DAYS, index_guild
 
@@ -687,11 +687,11 @@ class AIAdmin(commands.Cog):
 
     @ai_emojis.command(name="show")
     @guild_only
-    async def ai_emojis_show(self, ctx: DiscoContext) -> None:
+    async def ai_emojis_show(self, ctx: ArchimedesContext) -> None:
         """Browse indexed emoji meanings."""
         rows = await ctx.db.get_all_emoji_meanings(ctx.guild_id)
         if not rows:
-            await ctx.reply_error("No emoji meanings indexed. Run `,ai emojis index`.")
+            await ctx.reply_error("No emoji meanings indexed. Run `.ai emojis index`.")
             return
         live = {int(e.id): e for e in ctx.guild.emojis}
         pages: list[discord.Embed] = []
@@ -713,7 +713,7 @@ class AIAdmin(commands.Cog):
     @guild_only
     @require_manage_guild
     async def ai_emojis_set(
-        self, ctx: DiscoContext, emoji: discord.Emoji, *, description: str,
+        self, ctx: ArchimedesContext, emoji: discord.Emoji, *, description: str,
     ) -> None:
         """Manually override the stored description for one emoji."""
         if emoji.guild_id != ctx.guild_id:
@@ -729,7 +729,7 @@ class AIAdmin(commands.Cog):
     @ai.command(name="audit")
     @guild_only
     @require_manage_guild
-    async def ai_audit(self, ctx: DiscoContext, limit: int = 25) -> None:
+    async def ai_audit(self, ctx: ArchimedesContext, limit: int = 25) -> None:
         """Show recent AI-scope staff actions."""
         limit = max(1, min(100, int(limit)))
         rows = await recent_staff_actions(

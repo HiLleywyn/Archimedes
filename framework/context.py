@@ -1,6 +1,6 @@
 """framework/context.py -- the custom command context.
 
-``DiscoContext`` adds reply helpers so cogs never build raw error/success
+``ArchimedesContext`` adds reply helpers so cogs never build raw error/success
 embeds. Always prefer these over ``ctx.reply(embed=discord.Embed(...))``.
 """
 from __future__ import annotations
@@ -14,7 +14,7 @@ from framework.embed import card
 from framework.ui import C_ERROR, C_SUCCESS, C_WARNING
 
 
-class DiscoContext(commands.Context):
+class ArchimedesContext(commands.Context):
     """Command context with embed reply helpers and a ``db`` shortcut."""
 
     @property

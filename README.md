@@ -1,15 +1,14 @@
-# Disco AI
+# Archimedes
 
-A standalone AI chat bot for Discord. Disco is a memory-backed conversational
-companion: mention it, reply to it, or use `,ask`, and it answers with a
+A standalone AI chat bot for Discord. Archimedes is a memory-backed conversational
+companion: mention it, reply to it, or use `.ask`, and it answers with a
 persona-driven model while learning who it is talking to.
 
-This bot was separated out of the Discoin economy bot. It keeps the entire AI
-chat surface (the `,ai` and `,disco` command groups, per-user / per-channel /
-per-server context learning, the tool-calling loop, the memory sidecar) and
-drops everything to do with the economy game. It is fully self-contained: it
-has its own framework, config, database schema and entry point, and shares no
-code with Discoin.
+It is fully self-contained: the `.ai` and `.arch` command groups, per-user /
+per-channel / per-server context learning, the tool-calling loop and the
+memory sidecar all ship with their own framework, config, database schema and
+entry point. There are no external service dependencies beyond the model
+provider, PostgreSQL and (optionally) Redis.
 
 This bot lives at the root of its own repository. `main.py` is the entry
 point, `requirements.txt` / `pyproject.toml` declare the dependencies,
@@ -19,7 +18,7 @@ runs the test suite.
 ## What it does
 
 - **Conversational chat** -- replies to `@mentions`, replies to its own
-  messages, the `,ask` command, and optional ambient chime-ins.
+  messages, the `.ask` command, and optional ambient chime-ins.
 - **Streaming replies** with a live status spinner and Regenerate / Continue
   buttons.
 - **Context learning** -- it builds and refreshes a per-user memory summary, a
@@ -31,29 +30,29 @@ runs the test suite.
 - **Memory sidecar** -- long-term facts and episodes, passive learning in
   opted-in channels, and an append-only training corpus of every turn.
 - **Thread or inline replies** -- each member picks their style with
-  `,disco chat` / `,disco threads`.
-- **Staff control surface** -- `,ai` tunes feature flags, system prompts,
+  `.arch chat` / `.arch threads`.
+- **Staff control surface** -- `.ai` tunes feature flags, system prompts,
   persona, the per-guild model picker, web search backend, the tool registry,
   the emoji meaning index, and an audit feed.
 - **Prompt-injection defence** and output sanitisation on every turn.
 
 There is **no crypto, money or economy** anything. There is no premium gate
-and no unlock requirement -- chat is open to everyone; the `,ai` staff
+and no unlock requirement -- chat is open to everyone; the `.ai` staff
 commands require the Manage Server permission.
 
 ## Commands
 
 | Command | Who | What |
 |---|---|---|
-| `@Disco <message>` | everyone | Talk to Disco. |
-| `,ask <question>` | everyone | Ask Disco something. |
-| `,disco` | everyone | Tune how Disco talks to you. |
-| `,disco chat` / `threads` | everyone | Inline vs thread replies. |
-| `,disco ctx [@user\|server\|clear]` | everyone | Inspect / wipe learned context. |
-| `,disco save` / `saved` / `unsave` | everyone | Bookmark Disco answers. |
-| `,disco optin` / `optout` | everyone | AI context tracking. |
-| `,ai` | Manage Server | The AI control surface (see `,ai help`). |
-| `,help` / `,ping` / `,about` | everyone | Bot meta. |
+| `@Archimedes <message>` | everyone | Talk to Archimedes. |
+| `.ask <question>` | everyone | Ask Archimedes something. |
+| `.arch` (or `.a`) | everyone | Tune how Archimedes talks to you. |
+| `.arch chat` / `threads` | everyone | Inline vs thread replies. |
+| `.arch ctx [@user\|server\|clear]` | everyone | Inspect / wipe learned context. |
+| `.arch save` / `saved` / `unsave` | everyone | Bookmark Archimedes answers. |
+| `.arch optin` / `optout` | everyone | AI context tracking. |
+| `.ai` | Manage Server | The AI control surface (see `.ai help`). |
+| `.help` / `.ping` / `.about` | everyone | Bot meta. |
 
 ## Setup
 
@@ -75,8 +74,8 @@ boot -- it is idempotent.
 ### Docker
 
 ```sh
-docker build -t discoai .
-docker run --env-file .env discoai
+docker build -t archimedes .
+docker run --env-file .env archimedes
 ```
 
 A `railway.toml` is included for one-click Railway deploys.
@@ -95,13 +94,13 @@ documented list. The essentials:
 | `REDIS_URL` | no | Enables the short-term memory store. |
 | `CHAT_BACKEND` | no | `openrouter` (default) or `ollama`. |
 | `SEARCH_BACKEND` | no | `ddg` (default, no key) or `brave`. |
-| `PREFIX` | no | Command prefix, default `,`. |
+| `PREFIX` | no | Command prefix, default `.`. |
 
 ## Lua plugins
 
 Drop a `.lua` file in `plugins/` to register extra agent tools without
 touching Python. See `plugins/README.md` and the `plugins/coinflip.lua`
-example. Run `,ai reloadtools` after adding one.
+example. Run `.ai reloadtools` after adding one.
 
 ## Layout
 
@@ -112,11 +111,11 @@ pyproject.toml       project metadata + pytest config
 requirements.txt     runtime dependencies
 framework/           bot class, embeds, UI, context, DB layer, audit
 ai/                  model client, memory, traits, context, tools, safety
-cogs/                chat brain, ,disco, ,ai admin, memory sidecar, meta
+cogs/                chat brain, .arch, .ai admin, memory sidecar, meta
 database/schema.sql  idempotent schema, applied on boot
 plugins/             Lua tool plugins (+ a working coinflip example)
 tests/               offline smoke tests
-.github/workflows/   CI (activates when this folder is a repo root)
+.github/workflows/   CI (lint + tests)
 Dockerfile           container build
 ```
 

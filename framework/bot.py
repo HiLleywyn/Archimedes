@@ -1,4 +1,4 @@
-"""framework/bot.py -- the Disco AI bot class.
+"""framework/bot.py -- the Archimedes bot class.
 
 Owns the shared services (database, Redis short-term store, memory sidecar,
 tool registry, training logger), loads the cogs, and tracks the ids of its
@@ -13,7 +13,7 @@ import discord
 from discord.ext import commands
 
 from config import Config
-from framework.context import DiscoContext
+from framework.context import ArchimedesContext
 from framework.db import Database
 
 log = logging.getLogger(__name__)
@@ -22,13 +22,13 @@ log = logging.getLogger(__name__)
 COGS: tuple[str, ...] = (
     "cogs.meta",
     "cogs.chat",
-    "cogs.disco",
+    "cogs.archimedes",
     "cogs.ai_admin",
     "cogs.sidecar",
 )
 
 
-class DiscoAIBot(commands.Bot):
+class ArchimedesBot(commands.Bot):
     """The standalone AI chat bot."""
 
     def __init__(self) -> None:
@@ -54,7 +54,7 @@ class DiscoAIBot(commands.Bot):
         # tell "user replied to one of my answers" from "user replied to
         # someone else" without a DB round-trip.
         self._ai_message_ids: collections.deque[int] = collections.deque(maxlen=4000)
-        # Thread ids Disco spawned for conversations. Any message in one is
+        # Thread ids Archimedes spawned for conversations. Any message in one is
         # treated as a continuation, even without an explicit reply.
         self._ai_thread_ids: collections.deque[int] = collections.deque(maxlen=2000)
 
@@ -85,7 +85,7 @@ class DiscoAIBot(commands.Bot):
         log.info("Logged in as %s (id=%s) in %d guild(s)",
                  self.user, getattr(self.user, "id", "?"), len(self.guilds))
 
-    async def get_context(self, message, *, cls=DiscoContext):
+    async def get_context(self, message, *, cls=ArchimedesContext):
         return await super().get_context(message, cls=cls)
 
     async def close(self) -> None:

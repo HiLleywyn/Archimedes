@@ -1,4 +1,4 @@
-# Disco AI -- standalone AI chat bot.
+# Archimedes -- standalone AI chat bot.
 FROM python:3.12-slim-bookworm
 
 WORKDIR /app

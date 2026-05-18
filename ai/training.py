@@ -1,6 +1,6 @@
 """ai/training.py -- append-only capture of every chat turn.
 
-Every completed turn is written to ``disco_training_turns`` along with the
+Every completed turn is written to ``archimedes_training_turns`` along with the
 full message list, so the corpus can later be curated or used for offline
 fine-tuning without adding any runtime inference dependency. The thumbs
 up / down reaction on a reply scores the matching row.
@@ -38,7 +38,7 @@ class TrainingLogger:
         """Append one turn. Returns the new row id, or None on failure."""
         try:
             return await self.db.fetch_val(
-                "INSERT INTO disco_training_turns "
+                "INSERT INTO archimedes_training_turns "
                 "(user_id, guild_id, channel_id, user_message, assistant_reply, "
                 " messages, model) "
                 "VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7) RETURNING id",
@@ -54,8 +54,8 @@ class TrainingLogger:
         """Score the most recent turn in a channel (+1 / -1)."""
         try:
             await self.db.execute(
-                "UPDATE disco_training_turns SET feedback=$2 WHERE id = ("
-                "  SELECT id FROM disco_training_turns WHERE channel_id=$1 "
+                "UPDATE archimedes_training_turns SET feedback=$2 WHERE id = ("
+                "  SELECT id FROM archimedes_training_turns WHERE channel_id=$1 "
                 "  ORDER BY id DESC LIMIT 1)",
                 int(channel_id), int(value),
             )

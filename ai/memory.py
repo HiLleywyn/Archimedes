@@ -4,9 +4,9 @@ Three layers of durable memory:
 
   * ``ai_user_memory``  -- a rolling 2-3 sentence summary of who a member is,
     refreshed from recent conversation by the model.
-  * ``disco_facts``     -- discrete key/value facts scoped to a user or guild,
+  * ``archimedes_facts``     -- discrete key/value facts scoped to a user or guild,
     written by the ``remember_fact`` tool or by an admin.
-  * ``disco_episodes``  -- short event summaries (passive learning) that the
+  * ``archimedes_episodes``  -- short event summaries (passive learning) that the
     recall surfaces back into context.
 
 ``run_post_message_tasks`` is the shared post-turn hook every chat path
@@ -74,7 +74,7 @@ class MemoryService:
         rows = await self.db.fetch_all(
             "SELECT scope, key, value, confidence, source, "
             "EXTRACT(EPOCH FROM updated_at) AS updated_at "
-            "FROM disco_facts WHERE scope=$1 ORDER BY updated_at DESC LIMIT $2",
+            "FROM archimedes_facts WHERE scope=$1 ORDER BY updated_at DESC LIMIT $2",
             scope, int(limit),
         )
         return [
@@ -88,7 +88,7 @@ class MemoryService:
         confidence: float = 1.0, source: str = "auto",
     ) -> None:
         await self.db.execute(
-            "INSERT INTO disco_facts (scope, key, value, confidence, source, updated_at) "
+            "INSERT INTO archimedes_facts (scope, key, value, confidence, source, updated_at) "
             "VALUES ($1,$2,$3,$4,$5,NOW()) "
             "ON CONFLICT (scope, key) DO UPDATE SET "
             "value=EXCLUDED.value, confidence=EXCLUDED.confidence, "
@@ -100,14 +100,14 @@ class MemoryService:
         self, scope: str, summary: str, tags: list[str] | tuple[str, ...] = (),
     ) -> None:
         await self.db.execute(
-            "INSERT INTO disco_episodes (scope, summary, tags) VALUES ($1,$2,$3)",
+            "INSERT INTO archimedes_episodes (scope, summary, tags) VALUES ($1,$2,$3)",
             scope, summary[:500], list(tags),
         )
 
     async def get_episodes(self, scope: str, limit: int = 8) -> list[Episode]:
         rows = await self.db.fetch_all(
             "SELECT scope, summary, tags, EXTRACT(EPOCH FROM created_at) AS created_at "
-            "FROM disco_episodes WHERE scope=$1 ORDER BY created_at DESC LIMIT $2",
+            "FROM archimedes_episodes WHERE scope=$1 ORDER BY created_at DESC LIMIT $2",
             scope, int(limit),
         )
         return [
@@ -157,7 +157,7 @@ async def refresh_user_memory(db, user_id: int, guild_id: int, display_name: str
 
     transcript_lines: list[str] = []
     for r in reversed(rows):
-        who = display_name if r["role"] == "user" else "Disco"
+        who = display_name if r["role"] == "user" else "Archimedes"
         transcript_lines.append(f"{who}: {sanitize_context_snippet(r['content'], 200)}")
     transcript = "\n".join(transcript_lines)
 

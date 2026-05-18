@@ -1,7 +1,7 @@
 """framework/audit.py -- staff action audit log.
 
-Every mutating ,ai command records a row so operators have a feed of who
-changed what. ``,ai audit`` reads it back.
+Every mutating .ai command records a row so operators have a feed of who
+changed what. ``.ai audit`` reads it back.
 """
 from __future__ import annotations
 
