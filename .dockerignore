@@ -7,3 +7,5 @@ __pycache__/
 venv/
 .env
 tests/
+agent-sidecar/node_modules/
+agent-sidecar/dist/

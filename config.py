@@ -87,6 +87,20 @@ class Config:
     PASSIVE_LEARNING: bool = _env_bool("ARCHIMEDES_PASSIVE_LEARNING", False)
     AMBIENT_REPLIES: bool = _env_bool("AMBIENT_REPLIES", False)
 
+    # ── Agent SDK sidecar ─────────────────────────────────────────────────────
+    # The multi-step tool-calling loop runs in a Node sidecar that embeds the
+    # OpenRouter Agent SDK (agent-sidecar/). When the sidecar is unreachable
+    # the bot falls back to its in-process loop, so this is safe to leave on.
+    AGENT_SIDECAR_ENABLED: bool = _env_bool("AGENT_SIDECAR_ENABLED", True)
+    # An external sidecar WebSocket endpoint. Blank autostarts a local one.
+    AGENT_SIDECAR_URL: str = _env("AGENT_SIDECAR_URL")
+    # Port for the autostarted local sidecar.
+    AGENT_SIDECAR_PORT: int = _env_int("AGENT_SIDECAR_PORT", 8770)
+    # Stop conditions for the agent loop: a hard ceiling on model steps, and
+    # an optional per-turn cost cap in US dollars (0 disables the cost cap).
+    AGENT_MAX_STEPS: int = _env_int("AGENT_MAX_STEPS", 4)
+    AGENT_MAX_COST: float = _env_float("AGENT_MAX_COST", 0.0)
+
     # ── Memory ────────────────────────────────────────────────────────────────
     MEMORY_REFRESH_HOURS: int = _env_int("MEMORY_REFRESH_HOURS", 4)
     SHORT_TERM_TURNS: int = _env_int("SHORT_TERM_TURNS", 12)

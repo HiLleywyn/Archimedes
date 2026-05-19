@@ -144,6 +144,7 @@ documented list. The essentials:
 | `REDIS_URL` | no | Enables the short-term memory store. |
 | `CHAT_BACKEND` | no | `openrouter` (default) or `ollama`. |
 | `SEARCH_BACKEND` | no | `ddg` (default, no key) or `brave`. |
+| `AGENT_SIDECAR_ENABLED` | no | Run the tool loop on the Agent SDK sidecar (default on). |
 | `PREFIX` | no | Command prefix, default `.`. |
 
 ## Lua plugins
@@ -177,6 +178,27 @@ Installed and enabled plugins persist across restarts: bundled plugins ship
 in the repository, and a marketplace plugin's Lua source is stored in the
 database, so a redeploy of the (otherwise stateless) container restores the
 exact plugin set.
+
+## Agent loop
+
+A chat turn that calls tools is a multi-step loop: the model asks for a tool,
+the tool runs, its result is fed back, and the model is asked again -- until
+it answers in plain text or a stop condition fires.
+
+That loop runs through the **OpenRouter Agent SDK**. The SDK is a TypeScript
+package, so it lives in a small Node service -- the **agent sidecar** in
+`agent-sidecar/` -- that the Python bot drives over a WebSocket. The bot
+streams the model's text back, and every tool the SDK calls is bridged back
+to the bot, which runs it through the tool registry and the execution
+pipeline (below) before the result returns to the model. Tools, plugins and
+the pipeline stay exactly where they are; only the loop moves.
+
+The sidecar autostarts with the bot -- the Docker image bundles the Node
+runtime and the built service -- and is supervised by it. If it is
+unreachable the bot falls back to an equivalent in-process loop, so the
+feature is safe to leave on. Stop conditions are tunable: `AGENT_MAX_STEPS`
+caps model steps per turn and `AGENT_MAX_COST` sets an optional per-turn
+dollar ceiling.
 
 ## Tool execution pipeline
 
@@ -223,6 +245,7 @@ framework/plugins/   the Lua plugin system: runtime, API, registry, manager
 framework/pipeline/  the tool-execution pipeline: envelope, gate, processing
 ai/                  model client, memory, traits, context, tools, safety
 cogs/                chat brain, .arch, .ai admin, sidecar, meta
+agent-sidecar/       the OpenRouter Agent SDK service (TypeScript / Node)
 database/schema.sql  idempotent schema, applied on boot
 plugins/             bundled Lua plugins (notes, tasks, events, groups, coinflip)
 tests/               offline smoke tests

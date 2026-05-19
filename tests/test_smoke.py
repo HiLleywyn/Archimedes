@@ -22,7 +22,7 @@ _MODULES = [
     "framework.pipeline.injection", "framework.pipeline.transforms",
     "ai.emoji_safety", "ai.safety", "ai.quota", "ai.client", "ai.models",
     "ai.prompts", "ai.redis_store", "ai.traits", "ai.memory", "ai.context",
-    "ai.tools", "ai.training", "ai.emoji_index",
+    "ai.tools", "ai.agent_sidecar", "ai.training", "ai.emoji_index",
     "cogs.meta", "cogs.chat_views", "cogs.chat", "cogs.archimedes",
     "cogs.ai_admin", "cogs.sidecar",
 ]
@@ -116,6 +116,25 @@ def test_tool_registry_unregister() -> None:
     assert reg.unregister("plugin.thing") is True
     assert reg.get("plugin.thing") is None
     assert reg.unregister("plugin.thing") is False
+
+
+async def test_agent_sidecar_unavailable_before_start() -> None:
+    """A fresh, unstarted sidecar reports unavailable and refuses a turn.
+
+    run_stream must raise AgentSidecarUnavailable before yielding anything so
+    the agent loop can fall back to the in-process path.
+    """
+    from ai.agent_sidecar import AgentSidecar, AgentSidecarUnavailable
+    from ai.tools import ToolContext
+
+    sidecar = AgentSidecar()
+    assert sidecar.available is False
+    assert sidecar.url == ""
+
+    ctx = ToolContext(bot=None, db=None, user_id=1, guild_id=1)
+    with pytest.raises(AgentSidecarUnavailable):
+        async for _event in sidecar.run_stream([], ctx):
+            pass
 
 
 def test_trait_tone_detection() -> None:
