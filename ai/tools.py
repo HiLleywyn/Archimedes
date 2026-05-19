@@ -383,12 +383,15 @@ async def _deliver_images(ctx: ToolContext, urls: list, prompt: str,
                     continue
                 name = f"image{index}.png"
                 builder.image(f"attachment://{name}")
-                await channel.send(
+                sent = await channel.send(
                     embed=builder.build(),
                     file=discord.File(io.BytesIO(raw), filename=name))
             else:
                 builder.image(str(url))
-                await channel.send(embed=builder.build())
+                sent = await channel.send(embed=builder.build())
+            # Track it as an AI message so a reply to the image is recognised.
+            if ctx.bot is not None:
+                ctx.bot.remember_ai_message(sent.id)
             delivered += 1
         except discord.HTTPException:
             continue
@@ -411,9 +414,11 @@ async def _deliver_video(bot, channel_id: int, url: str, prompt: str,
     builder = card("Generated video", description=prompt[:400], color=C_PURPLE)
     builder.footer(footer)
     try:
-        await channel.send(
+        sent = await channel.send(
             embed=builder.build(),
             file=discord.File(io.BytesIO(download["data"]), filename="video.mp4"))
+        if bot is not None:
+            bot.remember_ai_message(sent.id)
     except discord.HTTPException as exc:
         await _notify(bot, channel_id, "Video generation finished",
                       f"The video was generated but could not be posted: {exc}",
