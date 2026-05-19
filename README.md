@@ -102,10 +102,16 @@ boot -- it is idempotent.
 
 ```sh
 docker build -t archimedes .
-docker run --env-file .env archimedes
+docker run --env-file .env -v archimedes-data:/data archimedes
 ```
 
-A `railway.toml` is included for one-click Railway deploys.
+The agent file workspace lives under `/data` (`WORKSPACE_ROOT` is set to
+`/data/workspace` in the image), so mounting a volume there keeps it across
+restarts; without `-v` the workspace is ephemeral.
+
+A `railway.toml` is included for one-click Railway deploys. On Railway,
+attach a volume to the service with the mount path `/data` to get the same
+persistence.
 
 ## Configuration
 
