@@ -178,6 +178,18 @@ feature is safe to leave on. Stop conditions are tunable: `AGENT_MAX_STEPS`
 caps model steps per turn and `AGENT_MAX_COST` sets an optional per-turn
 dollar ceiling.
 
+Two within-turn controls run on top of that loop. A tool may return a
+`next_turn` block in its result to steer the following model turn -- a
+different model, a lower temperature, a tighter token budget, or extra
+instructions -- which both the sidecar (through the Agent SDK's
+`nextTurnParams`) and the in-process loop apply before the model is asked
+again. And a tool call can be gated on human approval: list tool names in
+`AGENT_APPROVAL_TOOLS` or risk tiers in `AGENT_APPROVAL_RISKS`, and a gated
+call posts an Approve / Reject prompt in the channel before it runs, with a
+rejected call handed back to the model as a declined result. Approval is
+resolved entirely on the bot side within the turn, so the sidecar stays
+stateless per turn and conversation state stays in the bot.
+
 ## Tool execution pipeline
 
 A tool result never goes straight from a handler to the model. It travels a

@@ -17,7 +17,9 @@ The protocol is a compact JSON exchange (see ``agent-sidecar/src/server.ts``):
 the sidecar greets the connection with a ``hello`` frame, the bot sends a
 ``start`` frame, the sidecar streams ``delta`` text and ``tool_call``
 requests, the bot runs each tool through the execution pipeline and answers
-with ``tool_result``, and the turn ends with ``done`` or ``error``.
+with ``tool_result`` -- optionally carrying a ``next_turn`` directive that
+steers the following model turn -- and the turn ends with ``done`` or
+``error``.
 
 ``run_stream`` yields the same event vocabulary as the in-process agent loop
 in :mod:`ai.tools`, so the chat cog consumes either transparently. When the
@@ -37,6 +39,9 @@ import time
 import aiohttp
 
 from config import Config
+from ai.agent_control import (
+    needs_approval, request_tool_approval, split_next_turn,
+)
 from framework.pipeline import run_pipeline
 
 log = logging.getLogger(__name__)
@@ -47,7 +52,7 @@ _HEALTH_TIMEOUT_S = 15.0
 # Wire-protocol version. Must match PROTOCOL_VERSION in agent-sidecar/src.
 # Bumped whenever a message shape changes; the handshake fails fast when the
 # two halves disagree, which catches a half-finished deploy.
-_PROTOCOL_VERSION = 1
+_PROTOCOL_VERSION = 2
 
 # Supervisor restart policy. After a crash the process is respawned with an
 # escalating backoff; after _MAX_RESTART_ATTEMPTS consecutive failures the
@@ -579,23 +584,46 @@ class AgentSidecar:
             await session.close()
 
     async def _run_tool(self, ws, ctx, registry, event: dict, step: int):
-        """Execute one bridged tool call and stream its agent events."""
+        """Execute one bridged tool call and stream its agent events.
+
+        A tool flagged for approval is gated on a human yes/no first; a
+        rejected call never runs and an error result is sent back in its
+        place. A ``next_turn`` directive returned by the tool rides the
+        tool_result frame to the sidecar, which feeds it to the SDK's
+        nextTurnParams for the following model turn.
+        """
         name = str(event.get("name") or "")
         call_id = event.get("call_id")
         raw_args = event.get("arguments")
         args = raw_args if isinstance(raw_args, dict) else {}
+        spec = registry.get(name) if registry is not None else None
 
         yield {"type": "reset"}
-        yield {"type": "tool_start", "tool": name}
+
+        # A gated tool call waits for a human yes/no before it runs.
+        approved = True
+        if needs_approval(spec):
+            yield {"type": "approval_pending", "tool": name}
+            approved = await request_tool_approval(name, args, ctx)
+            yield {"type": "approval_resolved", "tool": name,
+                   "approved": approved}
 
         started = time.monotonic()
-        if registry is not None:
+        if not approved:
+            result = {"error": f"the user declined the '{name}' tool call, "
+                               f"so it was not run"}
+        elif registry is not None:
+            yield {"type": "tool_start", "tool": name}
             result = await registry.run(name, args, ctx)
         else:
+            yield {"type": "tool_start", "tool": name}
             result = {"error": "no tool registry available"}
         elapsed_ms = int((time.monotonic() - started) * 1000)
 
-        spec = registry.get(name) if registry is not None else None
+        # A next-turn directive is control data: peel it off before the
+        # result reaches the pipeline or the model.
+        result, directive = split_next_turn(result)
+
         piped = run_pipeline(
             name, result,
             meta={"round": step, "elapsed_ms": elapsed_ms},
@@ -606,14 +634,18 @@ class AgentSidecar:
         if (name == "data.web_search" and isinstance(data, dict)
                 and data.get("results")):
             yield {"type": "sources", "results": data["results"]}
-        yield {"type": "tool_done", "tool": name}
+        if approved:
+            yield {"type": "tool_done", "tool": name}
 
         try:
             payload = json.loads(piped.injected)
         except (json.JSONDecodeError, TypeError):
             payload = piped.injected
-        await ws.send_json({
+        frame: dict = {
             "type": "tool_result",
             "call_id": call_id,
             "result": payload,
-        })
+        }
+        if directive:
+            frame["next_turn"] = directive
+        await ws.send_json(frame)

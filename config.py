@@ -118,6 +118,17 @@ class Config:
     AGENT_PROVIDER_ALLOW_FALLBACKS: bool = _env_bool(
         "AGENT_PROVIDER_ALLOW_FALLBACKS", True)
     AGENT_SERVER_TOOLS: list[str] = _env_list("AGENT_SERVER_TOOLS")
+    # Tool-call approval. A gated tool call pauses for a human yes/no -- a
+    # button prompt in the channel -- before it runs; a rejected call never
+    # executes and the model is told it was declined. AGENT_APPROVAL_TOOLS is
+    # a comma-separated list of tool names to gate; AGENT_APPROVAL_RISKS a
+    # comma-separated list of risk tiers (read, safe, mutate) to gate. Both
+    # default empty, which leaves approval off and changes nothing.
+    # AGENT_APPROVAL_TIMEOUT_S bounds the wait for a decision; keep it well
+    # below AI_REPLY_TIMEOUT_S, since the wait counts against the turn.
+    AGENT_APPROVAL_TOOLS: list[str] = _env_list("AGENT_APPROVAL_TOOLS")
+    AGENT_APPROVAL_RISKS: list[str] = _env_list("AGENT_APPROVAL_RISKS")
+    AGENT_APPROVAL_TIMEOUT_S: int = _env_int("AGENT_APPROVAL_TIMEOUT_S", 45)
 
     # ── Memory ────────────────────────────────────────────────────────────────
     MEMORY_REFRESH_HOURS: int = _env_int("MEMORY_REFRESH_HOURS", 4)

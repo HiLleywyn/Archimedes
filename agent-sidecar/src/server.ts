@@ -10,7 +10,7 @@
  *                       models?, provider?, tools, server_tools?, ... }
  *   sidecar -> bot  : { type: "delta", text }              streamed model text
  *   sidecar -> bot  : { type: "tool_call", call_id, name, arguments }
- *   bot  -> sidecar : { type: "tool_result", call_id, result }
+ *   bot  -> sidecar : { type: "tool_result", call_id, result, next_turn? }
  *   sidecar -> bot  : { type: "done", text, finish_reason, model, usage,
  *                       tool_names }
  *   sidecar -> bot  : { type: "error", error }
@@ -27,6 +27,9 @@
  * over the same socket: the SDK calls execute(), the sidecar emits a
  * tool_call, and the bot answers with a tool_result. That keeps the tool
  * registry, the execution pipeline and the Lua plugins exactly where they are.
+ * A tool_result may also carry a `next_turn` directive -- the bot's way of
+ * steering the following model turn (model, temperature, token budget,
+ * instructions) -- which the sidecar feeds to the SDK's nextTurnParams.
  */
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
@@ -53,7 +56,7 @@ const API_KEY = process.env.OPENROUTER_API_KEY || '';
  * frame; either side treats a mismatch as a reason to fall back rather than
  * risk talking past a half-deployed peer.
  */
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 2;
 
 /** Best-effort version of the bundled Agent SDK, surfaced for logs only. */
 function readSdkVersion(): string {
@@ -96,6 +99,7 @@ interface StartMessage {
 }
 
 interface PendingToolCall {
+  name: string;
   resolve: (value: unknown) => void;
   reject: (reason: unknown) => void;
 }
@@ -108,22 +112,65 @@ function errorMessage(err: unknown): string {
 }
 
 /**
+ * Translate a bot-supplied `next_turn` directive into the SDK's
+ * nextTurnParams shape. The bridge speaks snake_case; the SDK speaks
+ * camelCase. Only the four parameters both the sidecar and the bot's
+ * in-process loop can honour identically are carried; an unknown or
+ * mistyped key is dropped, so a malformed directive can never break a turn.
+ */
+function translateNextTurn(raw: unknown): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (!raw || typeof raw !== 'object') {
+    return out;
+  }
+  const directive = raw as Record<string, unknown>;
+  if (typeof directive.model === 'string' && directive.model) {
+    out.model = directive.model;
+  }
+  if (typeof directive.instructions === 'string' && directive.instructions) {
+    out.instructions = directive.instructions;
+  }
+  if (typeof directive.temperature === 'number') {
+    out.temperature = directive.temperature;
+  }
+  if (typeof directive.max_output_tokens === 'number') {
+    out.maxOutputTokens = directive.max_output_tokens;
+  }
+  return out;
+}
+
+/**
  * One chat turn: drives callModel and bridges tool calls back to the bot.
  *
  * The sidecar is deliberately stateless per turn -- it opens one WebSocket,
  * runs one turn and closes. Conversation history, memory and traits all live
  * in the Python bot. The Agent SDK also offers a stateful mode (a persistent
- * turn-state accessor and approval-gated tool pausing); the bridge does NOT
- * use it, because that would split one turn's state across two runtimes.
- * Anything stateful belongs on the Python side. A build guard
- * (tests/test_sidecar_guards.py) fails CI if that surface appears here -- if a
- * future change genuinely needs it, that guard must be revisited deliberately.
+ * turn-state accessor and approval-gated tool pausing across separate
+ * request/response cycles); the bridge does NOT use it, because that would
+ * split one turn's state across two runtimes. Anything stateful belongs on
+ * the Python side. A build guard (tests/test_sidecar_guards.py) fails CI if
+ * that surface appears here -- if a future change genuinely needs it, that
+ * guard must be revisited deliberately.
+ *
+ * Two within-turn controls do ride the bridge, because neither needs
+ * persistent state. A tool may return a next_turn directive on its
+ * tool_result frame to steer the following model turn (model, temperature,
+ * token budget, instructions); the sidecar feeds it to the SDK's
+ * nextTurnParams. Tool-call approval is resolved entirely on the Python side
+ * within the turn -- a gated tool simply makes the bot withhold its
+ * tool_result until a human decides -- so the gate never reaches this
+ * stateless surface.
  */
 class Session {
   private readonly ws: WebSocket;
   private readonly client: OpenRouter;
   private readonly pending = new Map<string, PendingToolCall>();
   private readonly toolNames: string[] = [];
+  // The latest next_turn directive each tool returned, SDK-keyed and keyed by
+  // tool name. A tool's nextTurnParams functions read it after the tool runs;
+  // the next call of that tool overwrites it, so a stale directive is never
+  // applied twice.
+  private readonly nextTurnByName = new Map<string, Record<string, unknown>>();
   private callCounter = 0;
   private started = false;
   private turnId = '-';
@@ -203,6 +250,9 @@ class Session {
       const entry = this.pending.get(String(msg.call_id));
       if (entry) {
         this.pending.delete(String(msg.call_id));
+        // Record (or clear) this tool's next-turn directive before resolving,
+        // so the SDK sees it when it runs nextTurnParams after execute().
+        this.nextTurnByName.set(entry.name, translateNextTurn(msg.next_turn));
         entry.resolve(msg.result);
       }
     }
@@ -213,7 +263,7 @@ class Session {
     const callId = `t${++this.callCounter}`;
     this.toolNames.push(name);
     const promise = new Promise<unknown>((resolve, reject) => {
-      this.pending.set(callId, { resolve, reject });
+      this.pending.set(callId, { name, resolve, reject });
     });
     this.send({
       type: 'tool_call',
@@ -228,11 +278,47 @@ class Session {
     return schemas.map((entry) => {
       const fn = (entry.function ?? entry) as Record<string, any>;
       const name = String(fn.name || '');
+      // Each nextTurnParams function returns this tool's last directive value
+      // for that parameter, or the request's current value when it set none.
+      // The SDK threads the current value through every called tool, so a
+      // tool that sets no directive returns the value unchanged and never
+      // clobbers a directive an earlier tool in the round did set.
       return tool({
         name,
         description: String(fn.description || ''),
         inputSchema: toZodObject(fn.parameters),
         execute: async (args: unknown) => this.runTool(name, args),
+        nextTurnParams: {
+          model: (_params, context): string => {
+            const d = this.nextTurnByName.get(name);
+            if (d && typeof d.model === 'string' && d.model) {
+              return d.model;
+            }
+            // No directive: keep the current model. When the request uses a
+            // models fallback array context.model is empty -- returning null
+            // there leaves the model parameter unset rather than pinning it
+            // to an empty string the API would reject.
+            return (context.model || null) as string;
+          },
+          instructions: (_params, context) => {
+            const d = this.nextTurnByName.get(name);
+            return d && typeof d.instructions === 'string'
+              ? d.instructions
+              : context.instructions;
+          },
+          temperature: (_params, context) => {
+            const d = this.nextTurnByName.get(name);
+            return d && typeof d.temperature === 'number'
+              ? d.temperature
+              : context.temperature;
+          },
+          maxOutputTokens: (_params, context) => {
+            const d = this.nextTurnByName.get(name);
+            return d && typeof d.maxOutputTokens === 'number'
+              ? d.maxOutputTokens
+              : context.maxOutputTokens;
+          },
+        },
       });
     });
   }

@@ -22,8 +22,8 @@ _MODULES = [
     "framework.pipeline.injection", "framework.pipeline.transforms",
     "ai.emoji_safety", "ai.safety", "ai.quota", "ai.client", "ai.models",
     "ai.prompts", "ai.redis_store", "ai.traits", "ai.memory", "ai.context",
-    "ai.tools", "ai.workspace", "ai.agent_sidecar", "ai.training",
-    "ai.emoji_index",
+    "ai.tools", "ai.workspace", "ai.agent_control", "ai.agent_sidecar",
+    "ai.training", "ai.emoji_index",
     "cogs.meta", "cogs.chat_views", "cogs.chat", "cogs.archimedes",
     "cogs.ai_admin", "cogs.sidecar",
 ]
