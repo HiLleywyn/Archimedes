@@ -280,6 +280,26 @@ async def test_shell_passes_no_secrets_in_the_environment(ws, monkeypatch) -> No
     assert result["exit_code"] == 0
 
 
+async def test_shell_save_to_persists_stdout(ws) -> None:
+    ctx = _ctx()
+    workspace.write_file(ctx, "nums.txt", "\n".join(str(i) for i in range(1, 6)))
+    result = await workspace.run_shell(ctx, "sort -r nums.txt",
+                                       save_to="sorted.txt")
+    assert result["exit_code"] == 0
+    assert result["saved_to"] == "sorted.txt"
+    assert result["saved_bytes"] > 0
+    saved = workspace.read_file(ctx, "sorted.txt")
+    assert saved["content"].split() == ["5", "4", "3", "2", "1"]
+
+
+async def test_shell_save_to_cannot_escape_the_workspace(ws) -> None:
+    result = await workspace.run_shell(_ctx(), "echo hi",
+                                       save_to="../escape.txt")
+    assert "save_error" in result
+    assert "saved_to" not in result
+    assert list(ws.rglob("escape.txt")) == []
+
+
 # ── registry wiring ───────────────────────────────────────────────────────────
 def test_workspace_tools_are_registered_when_enabled(ws) -> None:
     names = {t.name for t in build_default_registry().all()}

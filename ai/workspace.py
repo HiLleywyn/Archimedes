@@ -397,8 +397,14 @@ def _unsafe_arg(arg: str) -> bool:
     return ".." in arg.replace("\\", "/").split("/")
 
 
-async def run_shell(ctx, command: str) -> dict:
-    """Run one allowlisted, read-only command inside the workspace."""
+async def run_shell(ctx, command: str, save_to=None) -> dict:
+    """Run one allowlisted, read-only command inside the workspace.
+
+    The command is run directly, with no shell, so a pipe or redirect is not
+    a feature -- pass the file as a direct argument instead (``sort -r
+    data.txt``). ``save_to``, when given, writes the command's stdout to that
+    workspace-relative file, which is the supported stand-in for ``>``.
+    """
     raw = str(command or "").strip()
     if not raw:
         return {"error": "command is required"}
@@ -407,8 +413,11 @@ async def run_shell(ctx, command: str) -> dict:
     for meta in _SHELL_METACHARS:
         if meta in raw:
             return {"error": "shell operators (pipes, redirects, ;, &&, "
-                             "backticks, $()) are not supported; run a "
-                             "single simple command"}
+                             "backticks, $()) are not supported. Pass the "
+                             "file as a direct argument instead, e.g. "
+                             "'sort -r data.txt' or 'wc -l data.txt'. To "
+                             "save output to a file, use the save_to "
+                             "argument."}
     try:
         argv = shlex.split(raw)
     except ValueError as exc:
@@ -465,7 +474,7 @@ async def run_shell(ctx, command: str) -> dict:
         return {"error": f"the command did not finish within {timeout}s"}
     out = stdout.decode("utf-8", "replace")
     err = stderr.decode("utf-8", "replace")
-    return {
+    result = {
         "command": raw,
         "exit_code": proc.returncode,
         "stdout": out[:_SHELL_OUTPUT_CHARS],
@@ -475,3 +484,13 @@ async def run_shell(ctx, command: str) -> dict:
         "elapsed_ms": int((time.monotonic() - started) * 1000),
         "timed_out": False,
     }
+    if save_to is not None and str(save_to).strip():
+        # Persist stdout through the confined writer -- same path checks and
+        # quota as files.write, so save_to can never escape the workspace.
+        saved = write_file(ctx, str(save_to), out)
+        if "error" in saved:
+            result["save_error"] = saved["error"]
+        else:
+            result["saved_to"] = saved["path"]
+            result["saved_bytes"] = saved["bytes"]
+    return result
