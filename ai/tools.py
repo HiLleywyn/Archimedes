@@ -53,6 +53,9 @@ import discord
 
 from config import Config
 from ai import workspace
+from ai.agent_control import (
+    apply_next_turn, needs_approval, request_tool_approval, split_next_turn,
+)
 from ai.agent_sidecar import AgentSidecarUnavailable, log_agent_turn
 from ai.client import (
     complete, download_media, generate_image, poll_video, stream_completion,
@@ -88,6 +91,10 @@ class ToolContext:
     registry: "ToolRegistry | None" = None
     # Per-turn usage ledger. A tool that calls a model records into it.
     meter: TurnMeter | None = None
+    # Resolves a gated tool call to a human yes/no. The chat cog sets it for a
+    # turn that has a channel to prompt in; left None elsewhere, which denies
+    # any gated call rather than running it unreviewed.
+    approver: "Callable[[str, dict], Awaitable[bool]] | None" = None
 
 
 @dataclass
@@ -113,6 +120,10 @@ class ToolSpec:
     risk: str = RISK_READ
     result_fields: tuple[str, ...] | None = None
     verbatim: bool = False
+    # When True, every call of this tool is gated on a human yes/no before it
+    # runs, regardless of the AGENT_APPROVAL_* config. Operators can gate any
+    # tool by name or risk tier through that config instead.
+    requires_approval: bool = False
 
     def as_openai_tool(self) -> dict:
         return {
@@ -678,9 +689,9 @@ def _register_workspace_tools(reg: ToolRegistry) -> None:
             "shell.run",
             "Run a single read-only shell command inside your sandboxed "
             "workspace, for example ls, cat, rg, find, wc, head, tail or "
-            "sort. To search file contents always use rg (ripgrep) -- it is "
-            "the preferred search tool; only fall back to grep, egrep or "
-            "fgrep if ripgrep fails or genuinely cannot do what you need. "
+            "sort. To search file contents, use rg (ripgrep) to search a "
+            "directory or the whole workspace, and grep to search a single "
+            "named file. "
             "Commands take a file path as a direct argument -- "
             "'sort -r data.txt', 'wc -l data.txt' -- so you do NOT need "
             "pipes or redirects, which are not supported. To save a "
@@ -690,7 +701,8 @@ def _register_workspace_tools(reg: ToolRegistry) -> None:
             {"type": "object", "properties": {
                 "command": {"type": "string",
                             "description": "The command line to run, e.g. "
-                                           "'rg TODO src' or "
+                                           "'rg TODO src', "
+                                           "'grep TODO notes.txt' or "
                                            "'sort -r data.txt'."},
                 "save_to": {"type": "string",
                             "description": "Optional workspace-relative file "
@@ -988,6 +1000,7 @@ async def _run_agent_inprocess(
                 "content": done_event.get("text") or None,
                 "tool_calls": calls,
             })
+            round_directive: dict | None = None
             for tc in calls:
                 name = tc.get("function", {}).get("name", "")
                 raw_args = tc.get("function", {}).get("arguments") or "{}"
@@ -995,17 +1008,39 @@ async def _run_agent_inprocess(
                     args = json.loads(raw_args)
                 except json.JSONDecodeError:
                     args = {}
-                yield {"type": "tool_start", "tool": name}
-                started = time.monotonic()
-                result = await registry.run(name, args, ctx)
-                elapsed_ms = int((time.monotonic() - started) * 1000)
                 tool_names.append(name)
+                spec = registry.get(name)
+
+                # A gated tool call waits for a human yes/no. A rejected call
+                # never runs -- the model is handed an error in its place and
+                # the turn continues.
+                approved = True
+                if needs_approval(spec):
+                    yield {"type": "approval_pending", "tool": name}
+                    approved = await request_tool_approval(name, args, ctx)
+                    yield {"type": "approval_resolved", "tool": name,
+                           "approved": approved}
+
+                started = time.monotonic()
+                if approved:
+                    yield {"type": "tool_start", "tool": name}
+                    result = await registry.run(name, args, ctx)
+                else:
+                    result = {"error": f"the user declined the '{name}' tool "
+                                       f"call, so it was not run"}
+                elapsed_ms = int((time.monotonic() - started) * 1000)
+
+                # A tool may steer the next model turn; that directive is
+                # control data, peeled off before the result reaches the
+                # pipeline or the model.
+                result, directive = split_next_turn(result)
+                if directive:
+                    round_directive = {**(round_directive or {}), **directive}
 
                 # The result does not go to the model raw. The pipeline wraps
                 # it in the contract envelope, runs it through the validation
                 # gate, compresses it deterministically and reduces it to
                 # minimal JSON.
-                spec = registry.get(name)
                 piped = run_pipeline(
                     name, result,
                     meta={"round": _round + 1, "elapsed_ms": elapsed_ms},
@@ -1016,12 +1051,20 @@ async def _run_agent_inprocess(
                 if (name == "data.web_search" and isinstance(data, dict)
                         and data.get("results")):
                     yield {"type": "sources", "results": data["results"]}
-                yield {"type": "tool_done", "tool": name}
+                if approved:
+                    yield {"type": "tool_done", "tool": name}
                 convo.append({
                     "role": "tool",
                     "tool_call_id": tc.get("id", ""),
                     "content": piped.injected,
                 })
+
+            # A next-turn directive returned by any tool this round is
+            # applied before the model is asked again.
+            model, temperature, max_tokens = apply_next_turn(
+                round_directive, convo=convo, model=model,
+                temperature=temperature, max_tokens=max_tokens,
+            )
 
         # Tool-round budget exhausted -- ask for a final plain answer.
         final = await complete(

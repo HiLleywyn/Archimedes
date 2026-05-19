@@ -8,6 +8,7 @@ tool-calling turn into a placeholder -> persist + learn.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import random
 import time
@@ -17,7 +18,9 @@ from discord.ext import commands
 
 from config import Config
 from framework.context import ArchimedesContext
+from framework.embed import card
 from framework.middleware import guild_only, no_bots
+from framework.ui import C_ERROR, C_SUCCESS, C_WARNING, clip
 from ai.client import complete_default
 from ai.context import ChatMode, build_system_prompt, gather_chat_context
 from ai.memory import run_post_message_tasks
@@ -30,7 +33,7 @@ from ai.safety import (
 )
 from ai.tools import ToolContext, run_agent_stream
 from ai.usage import TurnMeter
-from cogs.chat_views import AskReplyView, AskState, StreamRenderer
+from cogs.chat_views import AskReplyView, ApprovalView, AskState, StreamRenderer
 
 log = logging.getLogger(__name__)
 
@@ -99,6 +102,28 @@ def _stamp_footer(text: str, meter: TurnMeter | None) -> str:
         return body
     budget = _DISCORD_LIMIT - len(footer) - 1
     return text[:max(0, budget)] + "\n" + footer
+
+
+def _format_tool_args(args: dict) -> str:
+    """Render tool-call arguments as compact, clipped lines for an approval
+    prompt, so the person deciding can see what the call would do.
+
+    Long values are truncated; a non-dict or empty argument set reads as
+    "(no arguments)".
+    """
+    if not isinstance(args, dict) or not args:
+        return "_(no arguments)_"
+    lines = []
+    for key, value in list(args.items())[:8]:
+        if isinstance(value, str):
+            text = value
+        else:
+            try:
+                text = json.dumps(value, default=str)
+            except (TypeError, ValueError):
+                text = str(value)
+        lines.append(f"- **{key}**: {clip(text, 280)}")
+    return "\n".join(lines)
 
 
 class ChatBrain(commands.Cog):
@@ -388,6 +413,12 @@ class ChatBrain(commands.Cog):
             memory=self.bot.memory, registry=self.bot.tools,
             meter=meter,
         )
+
+        async def _approver(name: str, args: dict) -> bool:
+            return await self._collect_tool_approval(
+                channel_id, user_id, name, args)
+
+        tool_ctx.approver = _approver
         renderer = StreamRenderer(placeholder)
         animator = asyncio.create_task(renderer.run())
         final_text = ""
@@ -421,6 +452,56 @@ class ChatBrain(commands.Cog):
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
         return final_text or None
+
+    async def _collect_tool_approval(
+        self, channel_id: int, user_id: int, name: str, args: dict,
+    ) -> bool:
+        """Post an Approve / Reject prompt for one gated tool call.
+
+        Returns the human decision. A send failure or an unanswered prompt
+        counts as a refusal -- a gated tool is never run without an explicit
+        yes. The prompt message is edited in place with the outcome, so the
+        channel keeps a record of who cleared what.
+        """
+        channel = self.bot.get_channel(channel_id)
+        if channel is None:
+            return False
+        timeout = float(max(5, Config.AGENT_APPROVAL_TIMEOUT_S))
+        decision: asyncio.Future[bool] = (
+            asyncio.get_running_loop().create_future()
+        )
+        view = ApprovalView(user_id, decision, timeout=timeout)
+        builder = card(
+            "Tool approval needed",
+            description=f"Archimedes wants to run `{name}`.\n"
+                        f"{_format_tool_args(args)}",
+            color=C_WARNING,
+        )
+        builder.footer(f"Decide within {int(timeout)}s -- no answer is a "
+                       f"refusal.")
+        try:
+            prompt = await channel.send(
+                content=f"<@{user_id}>", embed=builder.build(), view=view,
+            )
+        except discord.HTTPException:
+            return False
+        try:
+            approved = await asyncio.wait_for(decision, timeout=timeout + 5)
+        except asyncio.TimeoutError:
+            approved = False
+        view.stop()
+        verdict = ("approved and is running" if approved
+                   else "not approved and will not run")
+        outcome = card(
+            "Tool approval needed",
+            description=f"`{name}` was {verdict}.",
+            color=C_SUCCESS if approved else C_ERROR,
+        )
+        try:
+            await prompt.edit(content=None, embed=outcome.build(), view=None)
+        except discord.HTTPException:
+            pass
+        return approved
 
     def _build_view(
         self, placeholder: discord.Message, user_id: int, channel_id: int,

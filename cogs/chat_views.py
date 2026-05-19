@@ -66,9 +66,19 @@ class StreamRenderer:
             if name:
                 self.tool_names.append(name)
             self.tool = ""
+        elif kind == "approval_pending":
+            self.tool = event.get("tool", "")
+            self.phase = "approval"
+            await self._render(force=True)
+        elif kind == "approval_resolved":
+            self.tool = ""
+            self.phase = "thinking"
+            await self._render(force=True)
 
     def _status_line(self) -> str:
         spin = _SPINNER[self.frame % len(_SPINNER)]
+        if self.phase == "approval" and self.tool:
+            return f"_{spin} waiting for approval to run `{self.tool}`..._"
         if self.phase == "tool" and self.tool:
             return f"_{spin} running `{self.tool}`..._"
         if self.phase == "writing":
@@ -154,3 +164,50 @@ class AskReplyView(discord.ui.View):
         await interaction.response.send_message(
             "\n".join(lines) or "(no sources)", ephemeral=True,
         )
+
+
+class ApprovalView(discord.ui.View):
+    """Approve / Reject buttons gating one tool call on a human decision.
+
+    The view resolves ``decision`` -- a future the agent loop awaits -- to
+    True on approval and False on rejection or timeout. Only the member who
+    started the turn may decide; an unanswered prompt is treated as a refusal,
+    so a gated tool is never run without an explicit yes.
+    """
+
+    def __init__(self, user_id: int, decision: "asyncio.Future[bool]", *,
+                 timeout: float) -> None:
+        super().__init__(timeout=timeout)
+        self.user_id = user_id
+        self._decision = decision
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "Only the person who asked can decide this.", ephemeral=True,
+            )
+            return False
+        return True
+
+    def _resolve(self, approved: bool) -> None:
+        if not self._decision.done():
+            self._decision.set_result(approved)
+
+    @discord.ui.button(label="Approve", style=discord.ButtonStyle.success,
+                       emoji="✅")
+    async def approve_btn(self, interaction: discord.Interaction,
+                          _b: discord.ui.Button):
+        await interaction.response.defer()
+        self._resolve(True)
+        self.stop()
+
+    @discord.ui.button(label="Reject", style=discord.ButtonStyle.danger,
+                       emoji="🛑")
+    async def reject_btn(self, interaction: discord.Interaction,
+                         _b: discord.ui.Button):
+        await interaction.response.defer()
+        self._resolve(False)
+        self.stop()
+
+    async def on_timeout(self) -> None:
+        self._resolve(False)

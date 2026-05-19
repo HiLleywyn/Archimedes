@@ -36,10 +36,10 @@ runs the test suite.
 - **File workspace** -- the `files.*` and `shell.run` tools give the model a
   private scratch directory, one per server (per user in a DM). It is
   sandboxed: paths cannot escape it, files and total size are capped, and the
-  shell runs only an allowlist of read-only commands -- it searches with
-  ripgrep, falling back to grep only when ripgrep cannot serve. Configured
-  with the `WORKSPACE_*` variables; turn it off entirely with
-  `WORKSPACE_ENABLED`.
+  shell runs only an allowlist of read-only commands -- it searches a
+  directory or the whole workspace with ripgrep and a single named file with
+  grep. Configured with the `WORKSPACE_*` variables; turn it off entirely
+  with `WORKSPACE_ENABLED`.
 - **Lua plugins** -- a full plugin system. A plugin is one `.lua` file that
   can register prefix commands, agent tools, background loops and event
   handlers, and reach out through an HTTP client, a Discord read/write API,
@@ -177,6 +177,18 @@ unreachable the bot falls back to an equivalent in-process loop, so the
 feature is safe to leave on. Stop conditions are tunable: `AGENT_MAX_STEPS`
 caps model steps per turn and `AGENT_MAX_COST` sets an optional per-turn
 dollar ceiling.
+
+Two within-turn controls run on top of that loop. A tool may return a
+`next_turn` block in its result to steer the following model turn -- a
+different model, a lower temperature, a tighter token budget, or extra
+instructions -- which both the sidecar (through the Agent SDK's
+`nextTurnParams`) and the in-process loop apply before the model is asked
+again. And a tool call can be gated on human approval: list tool names in
+`AGENT_APPROVAL_TOOLS` or risk tiers in `AGENT_APPROVAL_RISKS`, and a gated
+call posts an Approve / Reject prompt in the channel before it runs, with a
+rejected call handed back to the model as a declined result. Approval is
+resolved entirely on the bot side within the turn, so the sidecar stays
+stateless per turn and conversation state stays in the bot.
 
 ## Tool execution pipeline
 

@@ -371,8 +371,8 @@ def delete_file(ctx, path: str) -> dict:
 # ── allowlist shell tool ──────────────────────────────────────────────────────
 # Read-only commands only. The command is executed directly (no shell), so a
 # pipe or redirect is never interpreted -- it is just a literal argument.
-# rg (ripgrep) is the preferred content search; grep, egrep and fgrep stay on
-# the allowlist only as a fallback for the rare case ripgrep cannot serve.
+# rg (ripgrep) searches a directory or the whole workspace; grep searches a
+# single named file. egrep and fgrep stay on the allowlist as grep variants.
 _SHELL_ALLOWLIST = frozenset({
     "ls", "cat", "head", "tail", "wc", "rg", "grep", "egrep", "fgrep",
     "find", "pwd", "echo", "date", "stat", "sort", "uniq", "cut", "tr",
