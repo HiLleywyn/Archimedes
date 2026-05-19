@@ -114,6 +114,36 @@ def _server_script() -> str:
     return os.path.join(root, "agent-sidecar", "dist", "server.js")
 
 
+def _sdk_routing(model: str | None) -> dict:
+    """Provider-routing, model-fallback and server-tool fields for the start
+    frame, built from config.
+
+    Each key is omitted when its config is empty, so a deployment that sets
+    none of these produces a start frame identical to the one the sidecar
+    handled before it learned these fields.
+    """
+    routing: dict = {}
+    if Config.AGENT_FALLBACK_MODELS:
+        # The fallback array is the primary model followed by the configured
+        # alternates, tried in order; the SDK uses it in place of `model`.
+        ordered = [model] if model else []
+        for fallback in Config.AGENT_FALLBACK_MODELS:
+            if fallback and fallback not in ordered:
+                ordered.append(fallback)
+        if ordered:
+            routing["models"] = ordered
+    if Config.AGENT_PROVIDER_ORDER:
+        provider: dict = {"order": list(Config.AGENT_PROVIDER_ORDER)}
+        if not Config.AGENT_PROVIDER_ALLOW_FALLBACKS:
+            provider["allowFallbacks"] = False
+        routing["provider"] = provider
+    if Config.AGENT_SERVER_TOOLS:
+        routing["server_tools"] = [
+            {"type": name} for name in Config.AGENT_SERVER_TOOLS
+        ]
+    return routing
+
+
 class AgentSidecar:
     """Owns the Node agent sidecar process and the WebSocket bridge to it."""
 
@@ -423,6 +453,7 @@ class AgentSidecar:
             "max_steps": max(1, Config.AGENT_MAX_STEPS),
             "max_cost": max(0.0, Config.AGENT_MAX_COST),
         }
+        start.update(_sdk_routing(model))
 
         session = aiohttp.ClientSession()
         try:

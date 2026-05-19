@@ -6,12 +6,18 @@
  * compact JSON protocol over one WebSocket per chat turn:
  *
  *   sidecar -> bot  : { type: "hello", protocol_version, sdk_version }
- *   bot  -> sidecar : { type: "start", protocol_version, turn_id, model, ... }
+ *   bot  -> sidecar : { type: "start", protocol_version, turn_id, model,
+ *                       models?, provider?, tools, server_tools?, ... }
  *   sidecar -> bot  : { type: "delta", text }              streamed model text
  *   sidecar -> bot  : { type: "tool_call", call_id, name, arguments }
  *   bot  -> sidecar : { type: "tool_result", call_id, result }
- *   sidecar -> bot  : { type: "done", text, finish_reason, usage, tool_names }
+ *   sidecar -> bot  : { type: "done", text, finish_reason, model, usage,
+ *                       tool_names }
  *   sidecar -> bot  : { type: "error", error }
+ *
+ * Optional start fields drive the SDK's provider routing: `models` is a model
+ * fallback array, `provider` is OpenRouter routing preferences, and
+ * `server_tools` are OpenRouter-executed tools (not bridged to the bot).
  *
  * Every connection opens with a hello frame, so the two halves can confirm
  * they speak the same wire-protocol version before a turn is committed; a
@@ -30,6 +36,7 @@ import { WebSocketServer, WebSocket, type RawData } from 'ws';
 import {
   OpenRouter,
   tool,
+  serverTool,
   stepCountIs,
   maxCost,
   fromChatMessages,
@@ -74,10 +81,16 @@ interface StartMessage {
   protocol_version?: number | null;
   turn_id?: string | null;
   model?: string | null;
+  // A model fallback array, tried in order. Used in place of `model`.
+  models?: string[] | null;
+  // OpenRouter provider-routing preferences, forwarded to the SDK verbatim.
+  provider?: Record<string, unknown> | null;
   messages?: unknown[];
   temperature?: number | null;
   max_output_tokens?: number | null;
   tools?: Array<Record<string, any>>;
+  // OpenRouter server-executed tools, each a config object with a `type`.
+  server_tools?: Array<Record<string, any>>;
   max_steps?: number | null;
   max_cost?: number | null;
 }
@@ -224,16 +237,53 @@ class Session {
     });
   }
 
+  /**
+   * Build OpenRouter server-executed tools from the start frame. Each spec is
+   * a config object whose `type` selects the tool (web search, datetime, ...).
+   * OpenRouter runs these itself, so there is no bridge back to the bot.
+   */
+  private buildServerTools(specs: Array<Record<string, any>>): any[] {
+    const built: any[] = [];
+    for (const spec of specs) {
+      const type = spec && typeof spec.type === 'string' ? spec.type : '';
+      if (!type) {
+        continue;
+      }
+      try {
+        built.push(serverTool(spec as any));
+      } catch (err) {
+        this.log(`skipped server tool ${type}: ${errorMessage(err)}`);
+      }
+    }
+    return built;
+  }
+
   private async run(msg: StartMessage): Promise<void> {
     const messages = Array.isArray(msg.messages) ? msg.messages : [];
-    const tools = this.buildTools(Array.isArray(msg.tools) ? msg.tools : []);
-    this.log(`start model=${msg.model || 'default'} tools=${tools.length}`);
+    const clientTools = this.buildTools(
+      Array.isArray(msg.tools) ? msg.tools : [],
+    );
+    const serverTools = this.buildServerTools(
+      Array.isArray(msg.server_tools) ? msg.server_tools : [],
+    );
+    const tools = [...clientTools, ...serverTools];
+    this.log(
+      `start model=${msg.model || 'default'} tools=${clientTools.length} ` +
+      `server_tools=${serverTools.length}`,
+    );
 
     const request: Record<string, unknown> = {
       input: fromChatMessages(messages as any),
     };
-    if (msg.model) {
+    // A model fallback array (tried in order) stands in for a single model
+    // when the bot supplies one.
+    if (Array.isArray(msg.models) && msg.models.length > 0) {
+      request.models = msg.models;
+    } else if (msg.model) {
       request.model = msg.model;
+    }
+    if (msg.provider && typeof msg.provider === 'object') {
+      request.provider = msg.provider;
     }
     if (typeof msg.temperature === 'number') {
       request.temperature = msg.temperature;
