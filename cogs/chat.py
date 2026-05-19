@@ -156,7 +156,7 @@ class ChatBrain(commands.Cog):
             if self.bot.user is not None:
                 for tag in (f"<@{self.bot.user.id}>", f"<@!{self.bot.user.id}>"):
                     raw = raw.replace(tag, "")
-        question = sanitize_input(raw).strip()
+        question = sanitize_input(raw, keep_urls=True).strip()
         images = _image_urls(message)
         if not question and images:
             question = "What's in this image?"
