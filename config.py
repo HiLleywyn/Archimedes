@@ -157,6 +157,30 @@ class Config:
     PIPELINE_MAX_STRING: int = _env_int("PIPELINE_MAX_STRING", 1200)
     PIPELINE_MAX_LIST: int = _env_int("PIPELINE_MAX_LIST", 25)
     PIPELINE_INJECT_MAX_CHARS: int = _env_int("PIPELINE_INJECT_MAX_CHARS", 4000)
+    # The ceiling for a verbatim tool -- one whose output is the point, like a
+    # workspace file read or a shell capture. Such a result skips string and
+    # list compression and uses this (much larger) ceiling instead, so the
+    # model sees it whole rather than trimmed to a snippet.
+    PIPELINE_VERBATIM_MAX_CHARS: int = _env_int(
+        "PIPELINE_VERBATIM_MAX_CHARS", 200000)
+
+    # ── Agent file workspace ──────────────────────────────────────────────────
+    # The files.* and shell.run agent tools operate inside a sandboxed
+    # workspace: one directory per Discord server (per user in a DM), with no
+    # way out -- a tool can never reach the bot's own files or another
+    # server's. WORKSPACE_ROOT is the base directory those per-server
+    # workspaces live under; blank puts it at .workspace/ beside the bot. The
+    # caps bound a single file, the whole workspace, and the file count, so
+    # the workspace can never fill the host disk. WORKSPACE_SHELL_* govern the
+    # allowlist shell tool: turn it off to drop shell.run while keeping the
+    # file tools.
+    WORKSPACE_ENABLED: bool = _env_bool("WORKSPACE_ENABLED", True)
+    WORKSPACE_ROOT: str = _env("WORKSPACE_ROOT")
+    WORKSPACE_MAX_FILE_KB: int = _env_int("WORKSPACE_MAX_FILE_KB", 64)
+    WORKSPACE_QUOTA_KB: int = _env_int("WORKSPACE_QUOTA_KB", 4096)
+    WORKSPACE_MAX_FILES: int = _env_int("WORKSPACE_MAX_FILES", 200)
+    WORKSPACE_SHELL_ENABLED: bool = _env_bool("WORKSPACE_SHELL_ENABLED", True)
+    WORKSPACE_SHELL_TIMEOUT_S: int = _env_int("WORKSPACE_SHELL_TIMEOUT_S", 5)
 
     @classmethod
     def validate(cls) -> list[str]:

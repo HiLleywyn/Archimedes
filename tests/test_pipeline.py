@@ -268,3 +268,21 @@ def test_run_pipeline_compresses_an_oversized_result() -> None:
     assert len(piped.injected) <= 4100
     notes = piped.envelope["meta"]["pipeline"]["notes"]
     assert notes  # the compression that happened was recorded
+
+
+def test_run_pipeline_verbatim_skips_compression() -> None:
+    # A verbatim tool's result is exempt from string and list compression: a
+    # blob well past every default cap reaches the model whole and untrimmed.
+    blob = "x" * 50000
+    piped = run_pipeline("files.read", {"content": blob}, verbatim=True)
+    payload = json.loads(piped.injected)
+    assert payload["data"]["content"] == blob
+    assert "notes" not in payload  # nothing was trimmed
+    assert not piped.envelope["meta"]["pipeline"]["compressed"]
+
+
+def test_run_pipeline_verbatim_keeps_long_lists_whole() -> None:
+    piped = run_pipeline("files.grep", {"rows": list(range(500))},
+                         verbatim=True)
+    payload = json.loads(piped.injected)
+    assert payload["data"]["rows"] == list(range(500))

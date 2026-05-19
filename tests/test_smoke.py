@@ -22,7 +22,8 @@ _MODULES = [
     "framework.pipeline.injection", "framework.pipeline.transforms",
     "ai.emoji_safety", "ai.safety", "ai.quota", "ai.client", "ai.models",
     "ai.prompts", "ai.redis_store", "ai.traits", "ai.memory", "ai.context",
-    "ai.tools", "ai.agent_sidecar", "ai.training", "ai.emoji_index",
+    "ai.tools", "ai.workspace", "ai.agent_sidecar", "ai.training",
+    "ai.emoji_index",
     "cogs.meta", "cogs.chat_views", "cogs.chat", "cogs.archimedes",
     "cogs.ai_admin", "cogs.sidecar",
 ]
@@ -81,8 +82,10 @@ def test_tool_registry_is_generic_only() -> None:
         "memory.remember_fact", "memory.recall_facts",
         "transform.slice", "transform.project", "transform.aggregate",
         "image.generate", "video.generate",
+        "files.read", "files.write", "files.list", "files.grep",
+        "files.delete", "shell.run",
     }
-    assert len(reg.as_openai_tools()) == 9
+    assert len(reg.as_openai_tools()) == 15
 
 
 def test_tool_schemas_declare_array_item_types() -> None:

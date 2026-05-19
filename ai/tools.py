@@ -12,6 +12,16 @@ only generic, non-financial tools:
   * ``transform.aggregate``   -- deterministic sum/min/max/mean/count
   * ``image.generate``        -- generate an image (OpenRouter)
   * ``video.generate``        -- generate a video (OpenRouter, asynchronous)
+  * ``files.read``            -- read a file from the sandboxed workspace
+  * ``files.write``           -- write a file in the sandboxed workspace
+  * ``files.list``            -- list a workspace directory
+  * ``files.grep``            -- regex-search workspace files
+  * ``files.delete``          -- delete a workspace file
+  * ``shell.run``             -- run an allowlisted command in the workspace
+
+The ``files.*`` and ``shell.run`` tools are sandboxed to one directory per
+server by :mod:`ai.workspace`; they are gated on ``WORKSPACE_ENABLED`` and
+``WORKSPACE_SHELL_ENABLED``.
 
 Tools are registered with the :class:`ToolRegistry`; Lua plugins can register
 more through :class:`framework.plugins.manager.PluginManager`.
@@ -42,6 +52,7 @@ import aiohttp
 import discord
 
 from config import Config
+from ai import workspace
 from ai.agent_sidecar import AgentSidecarUnavailable, log_agent_turn
 from ai.client import (
     complete, download_media, generate_image, poll_video, stream_completion,
@@ -87,6 +98,11 @@ class ToolSpec:
     top-level keys its ``data`` object is expected to carry. The processing
     pipeline filters the result down to those fields, so an unexpected key
     never drifts through to the model.
+
+    ``verbatim`` marks a tool whose output is the whole point -- a file read,
+    a shell capture. Its result skips the pipeline's string and list
+    compression so the model sees it whole, bounded only by the much larger
+    verbatim ceiling.
     """
 
     name: str
@@ -96,6 +112,7 @@ class ToolSpec:
     category: str = "misc"
     risk: str = RISK_READ
     result_fields: tuple[str, ...] | None = None
+    verbatim: bool = False
 
     def as_openai_tool(self) -> dict:
         return {
@@ -318,6 +335,43 @@ async def _transform_aggregate(args: dict, ctx: ToolContext) -> dict:
     )
 
 
+# ── Workspace file and shell tools ────────────────────────────────────────────
+# These reach the sandboxed per-server workspace in :mod:`ai.workspace`. Every
+# path is confined to one directory; the shell runs an allowlist of read-only
+# commands. The handlers are thin: all the confinement lives in ai.workspace.
+async def _files_read(args: dict, ctx: ToolContext) -> dict:
+    return workspace.read_file(
+        ctx, args.get("path"),
+        offset=args.get("offset"), limit=args.get("limit"),
+    )
+
+
+async def _files_write(args: dict, ctx: ToolContext) -> dict:
+    return workspace.write_file(
+        ctx, args.get("path"), args.get("content"),
+        mode=str(args.get("mode") or "overwrite"),
+    )
+
+
+async def _files_list(args: dict, ctx: ToolContext) -> dict:
+    return workspace.list_dir(ctx, args.get("path") or "")
+
+
+async def _files_grep(args: dict, ctx: ToolContext) -> dict:
+    return workspace.grep_files(
+        ctx, args.get("pattern"), path=args.get("path") or "",
+        ignore_case=bool(args.get("ignore_case")),
+    )
+
+
+async def _files_delete(args: dict, ctx: ToolContext) -> dict:
+    return workspace.delete_file(ctx, args.get("path"))
+
+
+async def _shell_run(args: dict, ctx: ToolContext) -> dict:
+    return await workspace.run_shell(ctx, args.get("command"))
+
+
 # ── Image and video generation tools ──────────────────────────────────────────
 # Both run on OpenRouter. The model is the `image` / `video` category of the
 # per-guild model picker, so `.ai model set image|video <slug>` retunes them.
@@ -532,6 +586,110 @@ async def _generate_video(args: dict, ctx: ToolContext) -> dict:
     }
 
 
+def _register_workspace_tools(reg: ToolRegistry) -> None:
+    """Add the sandboxed workspace file tools, and the shell tool if enabled.
+
+    Every tool here is confined to one per-server directory by
+    :mod:`ai.workspace`. ``shell.run`` is registered only when
+    ``WORKSPACE_SHELL_ENABLED`` is on, so an operator can keep the file tools
+    without the shell.
+    """
+    reg.register(ToolSpec(
+        "files.read",
+        "Read a UTF-8 text file from your sandboxed workspace -- a private "
+        "scratch directory for this server. By default the whole file is "
+        "returned; pass offset (a 1-based line number) and limit (a line "
+        "count) to read a specific range of a large file. The path is "
+        "relative to the workspace.",
+        {"type": "object", "properties": {
+            "path": {"type": "string",
+                     "description": "Workspace-relative path of the file."},
+            "offset": {"type": "integer",
+                       "description": "Optional 1-based line to start from."},
+            "limit": {"type": "integer",
+                      "description": "Optional maximum number of lines to "
+                                     "return."},
+        }, "required": ["path"]},
+        _files_read, category="files", risk=RISK_READ, verbatim=True,
+        result_fields=("path", "content", "bytes", "total_lines",
+                       "start_line", "lines_returned", "more"),
+    ))
+    reg.register(ToolSpec(
+        "files.write",
+        "Create or overwrite a text file in your sandboxed workspace. Use "
+        "mode 'append' to add to the end of an existing file instead. The "
+        "path is relative to the workspace.",
+        {"type": "object", "properties": {
+            "path": {"type": "string",
+                     "description": "Workspace-relative path of the file."},
+            "content": {"type": "string",
+                        "description": "The text to write."},
+            "mode": {"type": "string", "enum": ["overwrite", "append"],
+                     "description": "Replace the file or append. Default "
+                                    "overwrite."},
+        }, "required": ["path", "content"]},
+        _files_write, category="files", risk=RISK_MUTATE,
+        result_fields=("path", "bytes", "mode", "created"),
+    ))
+    reg.register(ToolSpec(
+        "files.list",
+        "List the files and subdirectories in your sandboxed workspace. Pass "
+        "a path to list a subdirectory; omit it to list the workspace root.",
+        {"type": "object", "properties": {
+            "path": {"type": "string",
+                     "description": "Optional workspace-relative directory."},
+        }},
+        _files_list, category="files", risk=RISK_READ, verbatim=True,
+        result_fields=("path", "entries", "count"),
+    ))
+    reg.register(ToolSpec(
+        "files.grep",
+        "Search the text files in your sandboxed workspace for lines "
+        "matching a regular expression. Returns each matching line with its "
+        "file and line number.",
+        {"type": "object", "properties": {
+            "pattern": {"type": "string",
+                        "description": "The regular expression to search "
+                                       "for."},
+            "path": {"type": "string",
+                     "description": "Optional file or subdirectory to limit "
+                                    "the search to."},
+            "ignore_case": {"type": "boolean",
+                            "description": "Match case-insensitively."},
+        }, "required": ["pattern"]},
+        _files_grep, category="files", risk=RISK_READ, verbatim=True,
+        result_fields=("pattern", "matches", "match_count",
+                       "files_searched", "truncated"),
+    ))
+    reg.register(ToolSpec(
+        "files.delete",
+        "Delete a file from your sandboxed workspace.",
+        {"type": "object", "properties": {
+            "path": {"type": "string",
+                     "description": "Workspace-relative path of the file."},
+        }, "required": ["path"]},
+        _files_delete, category="files", risk=RISK_MUTATE,
+        result_fields=("path", "deleted"),
+    ))
+    if Config.WORKSPACE_SHELL_ENABLED:
+        reg.register(ToolSpec(
+            "shell.run",
+            "Run a single read-only shell command inside your sandboxed "
+            "workspace, for example ls, cat, grep, find, wc, head, tail or "
+            "sort. Only an allowlist of read-only commands is permitted; "
+            "pipes, redirects and command chaining are not, and every path "
+            "must stay inside the workspace.",
+            {"type": "object", "properties": {
+                "command": {"type": "string",
+                            "description": "The command line to run."},
+            }, "required": ["command"]},
+            _shell_run, category="shell", risk=RISK_SAFE, verbatim=True,
+            result_fields=("command", "exit_code", "stdout", "stderr",
+                           "stdout_truncated", "stderr_truncated",
+                           "elapsed_ms", "timed_out"),
+        ))
+
+
 def build_default_registry() -> ToolRegistry:
     """Create a registry pre-loaded with the generic tool set."""
     reg = ToolRegistry()
@@ -685,6 +843,8 @@ def build_default_registry() -> ToolRegistry:
         _generate_video, category="media", risk=RISK_SAFE,
         result_fields=("ok", "model", "status", "note"),
     ))
+    if Config.WORKSPACE_ENABLED:
+        _register_workspace_tools(reg)
     return reg
 
 
@@ -835,6 +995,7 @@ async def _run_agent_inprocess(
                     name, result,
                     meta={"round": _round + 1, "elapsed_ms": elapsed_ms},
                     result_fields=spec.result_fields if spec else None,
+                    verbatim=spec.verbatim if spec else False,
                 )
                 data = piped.envelope.get("data")
                 if (name == "data.web_search" and isinstance(data, dict)

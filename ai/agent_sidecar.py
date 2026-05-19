@@ -600,6 +600,7 @@ class AgentSidecar:
             name, result,
             meta={"round": step, "elapsed_ms": elapsed_ms},
             result_fields=spec.result_fields if spec else None,
+            verbatim=spec.verbatim if spec else False,
         )
         data = piped.envelope.get("data")
         if (name == "data.web_search" and isinstance(data, dict)

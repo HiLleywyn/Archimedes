@@ -27,10 +27,17 @@ runs the test suite.
   key/value facts, and per-channel activity context. Every reply gets richer.
 - **Tool calling** -- the model can call generic, non-financial tools: web
   search, image description, image and video generation, remember / recall
-  facts, and deterministic list transforms. Image and video generation run on
-  OpenRouter and are retunable per server with `.ai model set image|video`.
-  Every tool result is run through a strict execution pipeline before the
-  model sees it (see **Tool execution pipeline**).
+  facts, deterministic list transforms, and a sandboxed file workspace (read,
+  write, list, regex grep, and an allowlist shell). Image and video
+  generation run on OpenRouter and are retunable per server with
+  `.ai model set image|video`. Every tool result is run through a strict
+  execution pipeline before the model sees it (see **Tool execution
+  pipeline**).
+- **File workspace** -- the `files.*` and `shell.run` tools give the model a
+  private scratch directory, one per server (per user in a DM). It is
+  sandboxed: paths cannot escape it, files and total size are capped, and the
+  shell runs only an allowlist of read-only commands. Configured with the
+  `WORKSPACE_*` variables; turn it off entirely with `WORKSPACE_ENABLED`.
 - **Lua plugins** -- a full plugin system. A plugin is one `.lua` file that
   can register prefix commands, agent tools, background loops and event
   handlers, and reach out through an HTTP client, a Discord read/write API,
@@ -145,6 +152,7 @@ documented list. The essentials:
 | `CHAT_BACKEND` | no | `openrouter` (default) or `ollama`. |
 | `SEARCH_BACKEND` | no | `ddg` (default, no key) or `brave`. |
 | `AGENT_SIDECAR_ENABLED` | no | Run the tool loop on the Agent SDK sidecar (default on). |
+| `WORKSPACE_ENABLED` | no | Sandboxed file + shell tools for the agent (default on). |
 | `PREFIX` | no | Command prefix, default `.`. |
 
 ## Lua plugins
@@ -229,6 +237,11 @@ context window.
 `transform.slice`, `transform.project` and `transform.aggregate` round this
 out: pure, non-model tools for the list work the model would otherwise do by
 eye -- top-N, field selection, and sum / min / max / mean / count.
+
+A tool whose output *is* the point -- a workspace file read, a shell capture
+-- is marked **verbatim**: it skips string and list compression and uses a
+much larger injection ceiling, so the model sees the file or command output
+whole instead of trimmed to a snippet.
 
 The pipeline lives in `framework/pipeline/`; the compression caps are tunable
 through the `PIPELINE_*` environment variables.
