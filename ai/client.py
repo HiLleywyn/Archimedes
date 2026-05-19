@@ -274,7 +274,10 @@ async def generate_image(prompt: str, *, model: str, timeout: float = 120.0) -> 
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        "modalities": ["image", "text"],
+        # Image-only: a generation model has no text output, and asking for
+        # text alongside it leaves OpenRouter with no matching endpoint (a
+        # "no endpoints found" 404).
+        "modalities": ["image"],
     }
     async with _sem():
         session = await _get_session()
@@ -286,8 +289,10 @@ async def generate_image(prompt: str, *, model: str, timeout: float = 120.0) -> 
             ) as resp:
                 data = await resp.json(content_type=None)
                 if resp.status != 200:
-                    log.warning("image generation http %s", resp.status)
-                    return {"error": _api_error(data, resp.status)}
+                    message = _api_error(data, resp.status)
+                    log.warning("image generation http %s: %s",
+                                resp.status, message)
+                    return {"error": message}
         except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
             return {"error": f"image request failed: {exc}"}
         except ValueError:
