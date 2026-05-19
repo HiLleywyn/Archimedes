@@ -369,7 +369,9 @@ async def _files_delete(args: dict, ctx: ToolContext) -> dict:
 
 
 async def _shell_run(args: dict, ctx: ToolContext) -> dict:
-    return await workspace.run_shell(ctx, args.get("command"))
+    return await workspace.run_shell(
+        ctx, args.get("command"), save_to=args.get("save_to"),
+    )
 
 
 # ── Image and video generation tools ──────────────────────────────────────────
@@ -676,17 +678,26 @@ def _register_workspace_tools(reg: ToolRegistry) -> None:
             "shell.run",
             "Run a single read-only shell command inside your sandboxed "
             "workspace, for example ls, cat, grep, find, wc, head, tail or "
-            "sort. Only an allowlist of read-only commands is permitted; "
-            "pipes, redirects and command chaining are not, and every path "
-            "must stay inside the workspace.",
+            "sort. Commands take a file path as a direct argument -- "
+            "'sort -r data.txt', 'wc -l data.txt' -- so you do NOT need "
+            "pipes or redirects, which are not supported. To save a "
+            "command's output to a file, pass save_to instead of using '>'. "
+            "Only allowlisted read-only commands are permitted, and every "
+            "path must stay inside the workspace.",
             {"type": "object", "properties": {
                 "command": {"type": "string",
-                            "description": "The command line to run."},
+                            "description": "The command line to run, e.g. "
+                                           "'sort -r data.txt'."},
+                "save_to": {"type": "string",
+                            "description": "Optional workspace-relative file "
+                                           "to write the command's stdout "
+                                           "to."},
             }, "required": ["command"]},
             _shell_run, category="shell", risk=RISK_SAFE, verbatim=True,
             result_fields=("command", "exit_code", "stdout", "stderr",
                            "stdout_truncated", "stderr_truncated",
-                           "elapsed_ms", "timed_out"),
+                           "elapsed_ms", "timed_out", "saved_to",
+                           "saved_bytes", "save_error"),
         ))
 
 
