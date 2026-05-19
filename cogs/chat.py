@@ -38,17 +38,43 @@ _MAX_TOKENS = 1000
 
 
 def _image_urls(message: discord.Message) -> list[str]:
-    """Collect image URLs from a message's attachments and embeds."""
+    """Collect image URLs from one message's attachments and embeds."""
     urls: list[str] = []
     for att in message.attachments:
         ct = (att.content_type or "").lower()
         if ct.startswith("image") or att.filename.lower().endswith(_IMAGE_EXT):
             urls.append(att.url)
     for emb in message.embeds:
-        if emb.image and emb.image.url:
-            urls.append(emb.image.url)
-        elif emb.thumbnail and emb.thumbnail.url:
-            urls.append(emb.thumbnail.url)
+        for media in (emb.image, emb.thumbnail):
+            url = media.url if media else None
+            # An attachment:// URL is not fetchable on its own -- the
+            # attachment it points at is already collected above.
+            if url and not url.startswith("attachment://"):
+                urls.append(url)
+                break
+    return urls
+
+
+async def _gather_images(message: discord.Message) -> list[str]:
+    """Image URLs from the message, plus any message it is a reply to.
+
+    Replying to an image -- including one Archimedes itself generated and
+    posted -- pulls that image into the turn, so "what is this" and "edit
+    this" work on the replied-to image, not only on a fresh attachment.
+    """
+    urls = list(_image_urls(message))
+    ref = message.reference
+    if ref is not None and getattr(ref, "message_id", None):
+        referenced = ref.resolved
+        if not isinstance(referenced, discord.Message):
+            try:
+                referenced = await message.channel.fetch_message(ref.message_id)
+            except (discord.HTTPException, AttributeError):
+                referenced = None
+        if isinstance(referenced, discord.Message):
+            for url in _image_urls(referenced):
+                if url not in urls:
+                    urls.append(url)
     return urls[:4]
 
 
@@ -157,7 +183,7 @@ class ChatBrain(commands.Cog):
                 for tag in (f"<@{self.bot.user.id}>", f"<@!{self.bot.user.id}>"):
                     raw = raw.replace(tag, "")
         question = sanitize_input(raw, keep_urls=True).strip()
-        images = _image_urls(message)
+        images = await _gather_images(message)
         if not question and images:
             question = "What's in this image?"
         if not question:
@@ -234,7 +260,13 @@ class ChatBrain(commands.Cog):
         messages: list[dict] = [{"role": "system", "content": system_prompt}]
         messages.extend(ctx_obj.history)
         if images:
-            blocks: list[dict] = [{"type": "text", "text": question}]
+            # The markers give the model the image URLs as text, so it can
+            # hand one to a tool (describe, edit, animate); the image_url
+            # blocks let a vision-capable model see them directly.
+            markers = "  ".join(f"[ATTACHMENT: {url}]" for url in images)
+            blocks: list[dict] = [
+                {"type": "text", "text": f"{question}\n{markers}"},
+            ]
             for url in images:
                 blocks.append({"type": "image_url", "image_url": {"url": url}})
             messages.append({"role": "user", "content": blocks})
