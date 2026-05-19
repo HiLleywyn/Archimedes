@@ -29,12 +29,14 @@ from ai.safety import (
     is_injection_attempt, looks_like_acrostic, sanitize_input, sanitize_output,
 )
 from ai.tools import ToolContext, run_agent_stream
+from ai.usage import TurnMeter
 from cogs.chat_views import AskReplyView, AskState, StreamRenderer
 
 log = logging.getLogger(__name__)
 
 _IMAGE_EXT = (".png", ".jpg", ".jpeg", ".gif", ".webp")
 _MAX_TOKENS = 1000
+_DISCORD_LIMIT = 1990
 
 
 def _image_urls(message: discord.Message) -> list[str]:
@@ -81,6 +83,22 @@ async def _gather_images(message: discord.Message) -> list[str]:
 def _history_key(channel) -> str:
     """Conversation history bucket: one per thread, shared for inline chat."""
     return f"thread:{channel.id}" if isinstance(channel, discord.Thread) else "default"
+
+
+def _stamp_footer(text: str, meter: TurnMeter | None) -> str:
+    """Append the per-turn usage footer (model, time, tokens, cost).
+
+    Rendered as Discord subtext so it reads as a quiet footer under the
+    reply. A multi-step turn lists each model the turn touched.
+    """
+    body = text[:_DISCORD_LIMIT]
+    if meter is None:
+        return body
+    footer = meter.footer_text("-# ")
+    if not footer:
+        return body
+    budget = _DISCORD_LIMIT - len(footer) - 1
+    return text[:max(0, budget)] + "\n" + footer
 
 
 class ChatBrain(commands.Cog):
@@ -325,7 +343,8 @@ class ChatBrain(commands.Cog):
             sources=out.get("sources") or [],
         )
         try:
-            await placeholder.edit(content=answer[:1990], view=view)
+            await placeholder.edit(
+                content=_stamp_footer(answer, out.get("meter")), view=view)
         except discord.HTTPException:
             pass
 
@@ -361,10 +380,13 @@ class ChatBrain(commands.Cog):
         tool_schemas = self.bot.tools.as_openai_tools() if self.bot.tools else []
         out["tool_schemas"] = tool_schemas
 
+        meter = TurnMeter()
+        out["meter"] = meter
         tool_ctx = ToolContext(
             bot=self.bot, db=self.bot.db,
             user_id=user_id, guild_id=guild_id, channel_id=channel_id,
             memory=self.bot.memory, registry=self.bot.tools,
+            meter=meter,
         )
         renderer = StreamRenderer(placeholder)
         animator = asyncio.create_task(renderer.run())
@@ -454,7 +476,8 @@ class ChatBrain(commands.Cog):
             sources=out.get("sources") or [],
         )
         try:
-            await placeholder.edit(content=answer[:1990], view=view)
+            await placeholder.edit(
+                content=_stamp_footer(answer, out.get("meter")), view=view)
         except discord.HTTPException:
             pass
         self.bot.remember_ai_message(placeholder.id)
@@ -500,7 +523,8 @@ class ChatBrain(commands.Cog):
             sources=out.get("sources") or [],
         )
         try:
-            await placeholder.edit(content=answer[:1990], view=view)
+            await placeholder.edit(
+                content=_stamp_footer(answer, out.get("meter")), view=view)
         except discord.HTTPException:
             pass
         self.bot.remember_ai_message(placeholder.id)
@@ -530,9 +554,11 @@ class ChatBrain(commands.Cog):
             {"role": "system", "content": build_system_prompt(ctx_obj)},
             {"role": "user", "content": f"{message.author.display_name}: {content}"},
         ]
+        meter = TurnMeter()
         try:
             answer = await asyncio.wait_for(
-                complete_default(payload, max_tokens=120, temperature=0.9),
+                complete_default(payload, max_tokens=120, temperature=0.9,
+                                 meter=meter),
                 timeout=20.0,
             )
         except asyncio.TimeoutError:
@@ -547,7 +573,7 @@ class ChatBrain(commands.Cog):
         try:
             async with message.channel.typing():
                 await asyncio.sleep(random.uniform(1.0, 2.5))
-                sent = await message.channel.send(cleaned[:1990])
+                sent = await message.channel.send(_stamp_footer(cleaned, meter))
             self.bot.remember_ai_message(sent.id)
         except discord.HTTPException:
             cancel_ai_quota_reservation(message.author.id, guild.id, quota_ts)

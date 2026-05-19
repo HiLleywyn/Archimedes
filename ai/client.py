@@ -25,6 +25,7 @@ import logging
 import aiohttp
 
 from config import Config
+from ai.usage import TurnMeter
 
 log = logging.getLogger(__name__)
 
@@ -80,8 +81,14 @@ async def complete(
     temperature: float = 0.85,
     tools: list[dict] | None = None,
     timeout: float = 60.0,
+    meter: TurnMeter | None = None,
+    meter_label: str = "chat",
 ) -> str | None:
-    """Run a single non-streaming completion. Returns the assistant text."""
+    """Run a single non-streaming completion. Returns the assistant text.
+
+    When ``meter`` is given, the call's model, tokens and cost are recorded
+    into it under ``meter_label`` so the turn footer can account for it.
+    """
     base, api_key, default_model = _backend()
     payload: dict = {
         "model": model or default_model,
@@ -91,6 +98,8 @@ async def complete(
     }
     if tools:
         payload["tools"] = tools
+    if Config.CHAT_BACKEND == "openrouter":
+        payload["usage"] = {"include": True}
 
     async with _sem():
         session = await _get_session()
@@ -110,6 +119,11 @@ async def complete(
             log.warning("completion request failed: %s", exc)
             return None
 
+    if meter is not None and isinstance(data, dict):
+        meter.record_usage(
+            data.get("model") or model or default_model,
+            data.get("usage"), label=meter_label,
+        )
     try:
         return (data["choices"][0]["message"]["content"] or "").strip()
     except (KeyError, IndexError, TypeError):
@@ -119,10 +133,13 @@ async def complete(
 async def complete_default(
     messages: list[dict], *, max_tokens: int = 400, temperature: float = 0.85,
     model: str | None = None,
+    meter: TurnMeter | None = None,
+    meter_label: str = "chat",
 ) -> str | None:
     """``complete`` using the default chat model unless ``model`` is given."""
     return await complete(
         messages, model=model, max_tokens=max_tokens, temperature=temperature,
+        meter=meter, meter_label=meter_label,
     )
 
 
@@ -141,7 +158,7 @@ async def stream_completion(
       ``{"type": "delta", "text": str}``           -- a chunk of assistant text
       ``{"type": "done", "text": str,
           "finish_reason": str, "tool_calls": list,
-          "usage": dict}``                          -- the turn finished
+          "model": str, "usage": dict}``            -- the turn finished
       ``{"type": "error", "error": str}``           -- the request failed
     """
     base, api_key, default_model = _backend()
@@ -154,11 +171,17 @@ async def stream_completion(
     }
     if tools:
         payload["tools"] = tools
+    if Config.CHAT_BACKEND == "openrouter":
+        # Ask OpenRouter to bill the turn and report the cost in the final
+        # usage chunk; stream_options makes that chunk arrive at all.
+        payload["usage"] = {"include": True}
+        payload["stream_options"] = {"include_usage": True}
 
     text_parts: list[str] = []
     tool_calls: dict[int, dict] = {}
     finish_reason = ""
     usage: dict = {}
+    resp_model = ""
 
     async with _sem():
         session = await _get_session()
@@ -188,6 +211,8 @@ async def stream_completion(
                         continue
                     if obj.get("usage"):
                         usage = obj["usage"]
+                    if obj.get("model") and not resp_model:
+                        resp_model = obj["model"]
                     choices = obj.get("choices") or []
                     if not choices:
                         continue
@@ -225,6 +250,7 @@ async def stream_completion(
         "text": "".join(text_parts),
         "finish_reason": finish_reason,
         "tool_calls": [tool_calls[i] for i in sorted(tool_calls)],
+        "model": resp_model or model or default_model,
         "usage": usage,
     }
 
@@ -287,8 +313,8 @@ async def generate_image(
     http(s) URL) switches on image-to-image: the model edits or restyles that
     image rather than generating from the prompt alone.
 
-    Returns ``{"images": [url, ...]}`` on success (each a data or http URL),
-    or ``{"error": "..."}`` on failure.
+    Returns ``{"images": [url, ...], "usage": dict, "model": str}`` on success
+    (each image a data or http URL), or ``{"error": "..."}`` on failure.
     """
     if not Config.OPENROUTER_API_KEY:
         return {"error": "OPENROUTER_API_KEY is not configured"}
@@ -305,6 +331,8 @@ async def generate_image(
         # Image-only output: a generation model has no text to return, and
         # asking for text leaves OpenRouter with no matching endpoint.
         "modalities": ["image"],
+        # Bill the call and report the cost back in the usage block.
+        "usage": {"include": True},
     }
     image_config: dict = {}
     if aspect_ratio in _IMAGE_ASPECT_RATIOS:
@@ -346,7 +374,11 @@ async def generate_image(
             urls.append(str(url))
     if not urls:
         return {"error": "the image model returned no image"}
-    return {"images": urls}
+    return {
+        "images": urls,
+        "usage": data.get("usage") or {},
+        "model": data.get("model") or model,
+    }
 
 
 # Video generation options safe to forward to any video model.

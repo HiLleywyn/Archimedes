@@ -49,6 +49,7 @@ from ai.client import (
 )
 from ai.models import resolve_model
 from ai.safety import sanitize_context_snippet
+from ai.usage import TurnMeter
 from framework.embed import card
 from framework.pipeline import run_pipeline
 from framework.pipeline.transforms import aggregate, project_fields, slice_items
@@ -74,6 +75,8 @@ class ToolContext:
     channel_id: int = 0
     memory: object | None = None
     registry: "ToolRegistry | None" = None
+    # Per-turn usage ledger. A tool that calls a model records into it.
+    meter: TurnMeter | None = None
 
 
 @dataclass
@@ -257,7 +260,8 @@ async def _describe_image(args: dict, ctx: ToolContext) -> dict:
             {"type": "image_url", "image_url": {"url": image_url}},
         ]},
     ]
-    text = await complete(messages, model=pick.model, max_tokens=300, timeout=45)
+    text = await complete(messages, model=pick.model, max_tokens=300, timeout=45,
+                          meter=ctx.meter, meter_label="vision")
     if not text:
         return {"error": "vision model returned nothing"}
     return {"description": text}
@@ -365,7 +369,7 @@ async def _notify(bot, channel_id: int, title: str, message: str,
 
 
 async def _deliver_images(ctx: ToolContext, urls: list, prompt: str,
-                          model: str) -> int:
+                          model: str, cost=None) -> int:
     """Post generated images into the channel. Returns how many landed."""
     channel = (ctx.bot.get_channel(ctx.channel_id)
                if ctx.bot and ctx.channel_id else None)
@@ -373,12 +377,13 @@ async def _deliver_images(ctx: ToolContext, urls: list, prompt: str,
         return 0
     shown = urls[:_MAX_IMAGES]
     delivered = 0
+    footer = f"{model}  -  ${cost}" if cost else model
     for index, url in enumerate(shown):
         title = "Generated image"
         if len(shown) > 1:
             title = f"Generated image {index + 1}/{len(shown)}"
         builder = card(title, description=prompt[:400], color=C_PURPLE)
-        builder.footer(model)
+        builder.footer(footer)
         try:
             if str(url).startswith("data:"):
                 raw = _decode_data_url(str(url))
@@ -472,10 +477,15 @@ async def _generate_image(args: dict, ctx: ToolContext) -> dict:
     if result.get("error"):
         return {"error": result["error"]}
     images = result.get("images") or []
-    delivered = await _deliver_images(ctx, images, prompt, pick.model)
+    usage = result.get("usage") or {}
+    used_model = result.get("model") or pick.model
+    cost = usage.get("cost")
+    if ctx.meter is not None:
+        ctx.meter.record_usage(used_model, usage, label="image")
+    delivered = await _deliver_images(ctx, images, prompt, used_model, cost)
     return {
         "ok": True,
-        "model": pick.model,
+        "model": used_model,
         "images_generated": len(images),
         "delivered": delivered,
         "note": (f"{delivered} image(s) posted into the channel as embeds."
@@ -778,6 +788,12 @@ async def _run_agent_inprocess(
                 yield {"type": "error", "error": "empty_response"}
                 return
 
+            if ctx.meter is not None:
+                ctx.meter.record_usage(
+                    done_event.get("model"), done_event.get("usage"),
+                    label="chat",
+                )
+
             calls = done_event.get("tool_calls") or []
             if not calls or registry is None:
                 yield {
@@ -834,6 +850,7 @@ async def _run_agent_inprocess(
         # Tool-round budget exhausted -- ask for a final plain answer.
         final = await complete(
             convo, model=model, max_tokens=max_tokens, temperature=temperature,
+            meter=ctx.meter, meter_label="chat",
         )
         yield {
             "type": "done",

@@ -262,6 +262,7 @@ class Session {
 
     const text = await result.getText();
     let finishReason = '';
+    let modelUsed = '';
     let usage: Record<string, unknown> = {};
     try {
       const response: any = await result.getResponse();
@@ -271,6 +272,7 @@ class Session {
         output_tokens: raw.outputTokens ?? raw.output_tokens ?? 0,
         cost: raw.cost ?? 0,
       };
+      modelUsed = String(response?.model ?? '');
       const reason =
         response?.incompleteDetails?.reason ??
         response?.incomplete_details?.reason ??
@@ -290,6 +292,7 @@ class Session {
       type: 'done',
       text,
       finish_reason: finishReason,
+      model: modelUsed,
       usage,
       tool_names: this.toolNames,
     });

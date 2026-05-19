@@ -507,6 +507,12 @@ class AgentSidecar:
                 elif kind == "done":
                     finished = True
                     model_ms = int((time.monotonic() - model_started) * 1000)
+                    meter = getattr(ctx, "meter", None)
+                    if meter is not None:
+                        meter.record_usage(
+                            event.get("model") or model,
+                            event.get("usage"), label="chat",
+                        )
                     yield {
                         "type": "done",
                         "text": event.get("text") or "",
