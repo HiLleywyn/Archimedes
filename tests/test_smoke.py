@@ -206,6 +206,24 @@ def test_card_to_embed_builds_within_limits() -> None:
     assert len(embed) <= 6000
 
 
+def test_card_to_embed_supports_media() -> None:
+    from framework.plugins.api import card_to_embed
+
+    embed = card_to_embed({
+        "title": "Pic",
+        "image": "https://example.com/a.png",
+        "thumbnail": "https://example.com/t.png",
+        "url": "https://example.com/page",
+    })
+    assert embed.image.url == "https://example.com/a.png"
+    assert embed.thumbnail.url == "https://example.com/t.png"
+    assert embed.url == "https://example.com/page"
+
+    # A non-http value is ignored: a plugin cannot point an embed elsewhere.
+    safe = card_to_embed({"title": "X", "image": "file:///etc/passwd"})
+    assert safe.image.url is None
+
+
 def test_plugin_manifest_validation_rejects_bad_input() -> None:
     from framework.plugins.runtime import PluginError, parse_manifest
 

@@ -272,10 +272,16 @@ An embed is a plain table:
 ```lua
 {
   title = "...", description = "...", color = arch.colors.info,
-  footer = "...",
+  footer = "...", url = "https://...",
+  image = "https://...",      -- a large image below the body
+  thumbnail = "https://...",  -- a small image in the top corner
   fields = { { name = "Key", value = "Value", inline = true }, ... },
 }
 ```
+
+`image`, `thumbnail` and `url` accept an `http`/`https` URL only; any other
+value is ignored. `url` turns the title into a link. A tool that generates a
+picture can post it by replying with a card whose `image` is the result URL.
 
 ## Trying it
 

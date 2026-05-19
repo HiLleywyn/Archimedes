@@ -138,6 +138,17 @@ def card_to_embed(spec) -> discord.Embed:
         )
     if spec.get("footer"):
         builder.footer(str(spec["footer"])[:2048])
+    # An http(s) URL keys the title link, the main image and the thumbnail.
+    # Anything else is ignored so a plugin cannot point an embed at a
+    # non-web target.
+    for key, apply in (
+        ("url", builder.url),
+        ("image", builder.image),
+        ("thumbnail", builder.thumbnail),
+    ):
+        value = spec.get(key)
+        if isinstance(value, str) and value.startswith(("http://", "https://")):
+            apply(value)
     return builder.build()
 
 
