@@ -11,6 +11,16 @@
   assistant identity -- as the author or committer on any commit.
 - **Never** include `https://claude.ai/code/session_*` links in commit
   messages.
+- **Never** add a "Generated with Claude Code" line, a session link, or any
+  similar trailer at the bottom of a commit message.
+
+### Branch naming -- version, then type, then name
+- **Never** prefix a branch with `claude/` -- or any other AI / assistant
+  name.
+- Name every branch `version/type/name`: the version first, then the change
+  type (`feat`, `fix`, `docs`, `chore`, ...), then a short slug. For example
+  `v0.0.1/feat/ripgrep-coinflip-defaults`. The trailing name may be dropped
+  for a trivial change (`v0.0.1/feat`). Versions start at `v0.0.1`.
 
 ### No AI attribution anywhere
 Nothing committed to this repository may advertise that it was produced with
