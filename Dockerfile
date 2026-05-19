@@ -42,4 +42,13 @@ ENV PLUGIN_HTTP_ENABLED=true \
     PLUGIN_HTTP_MAX_REDIRECTS=3 \
     PLUGIN_HTTP_ALLOW_PRIVATE=false
 
+# Persistent storage. The agent file workspace lives under /data so it
+# survives a redeploy: attach a Railway volume (or `docker run -v`) with the
+# mount path /data and everything the files.* and shell.run tools write
+# persists. With nothing mounted, /data is an ordinary directory and the
+# workspace is ephemeral, exactly as before. An --env-file at run time still
+# overrides WORKSPACE_ROOT.
+RUN mkdir -p /data/workspace
+ENV WORKSPACE_ROOT=/data/workspace
+
 CMD ["python", "main.py"]

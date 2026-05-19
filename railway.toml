@@ -1,3 +1,9 @@
+# Persistent storage: attach a volume to this service in the Railway
+# dashboard with the mount path /data. The agent file workspace then lives on
+# it -- WORKSPACE_ROOT is set to /data/workspace in the Dockerfile -- and
+# survives every redeploy. Railway volumes are attached in the dashboard, not
+# declared in this file.
+
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
