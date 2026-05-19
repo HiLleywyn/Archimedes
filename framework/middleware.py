@@ -48,3 +48,24 @@ def require_manage_guild(func):
         return True
 
     return commands.check(predicate)(func)
+
+
+def require_owner(func):
+    """Gate a command behind the bot owner.
+
+    OWNER_ID is honored first; if it is unset, fall back to the Discord
+    application owner discovered by discord.py at login.
+    """
+    from config import Config
+
+    async def predicate(ctx) -> bool:
+        if Config.OWNER_ID and int(ctx.author.id) == int(Config.OWNER_ID):
+            return True
+        try:
+            if await ctx.bot.is_owner(ctx.author):
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+        raise commands.CheckFailure("Only the bot owner can use this command.")
+
+    return commands.check(predicate)(func)

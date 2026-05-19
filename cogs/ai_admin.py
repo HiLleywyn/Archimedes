@@ -7,9 +7,11 @@ feed. Every mutating command is gated behind Manage Server and audited.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 from config import Config
@@ -19,7 +21,7 @@ from framework.audit import (
 )
 from framework.context import ArchimedesContext
 from framework.embed import card
-from framework.middleware import guild_only, require_manage_guild
+from framework.middleware import guild_only, require_manage_guild, require_owner
 from framework.ui import (
     C_INFO, C_NAVY, C_PURPLE, C_SUCCESS, C_WARNING,
     CategoryPaginator, clip, fmt_ts,
@@ -134,6 +136,14 @@ class AIAdmin(commands.Cog):
             ])],
             "Audit": [page("AI Audit Feed", [
                 f"`{p}ai audit [limit]` -- recent staff actions",
+            ])],
+            "Lifecycle": [page("Bot Lifecycle (owner only)", [
+                f"`{p}ai restart` -- gracefully reconnect by re-execing",
+                f"`{p}ai shutdown` -- close cleanly and exit",
+                "",
+                "Both gated to the bot owner (OWNER_ID or the Discord",
+                "application owner). Restart re-execs the Python process",
+                "so a wedged gateway or stuck task clears without redeploy.",
             ])],
         }
 
@@ -948,6 +958,84 @@ class AIAdmin(commands.Cog):
             )
         b = card("AI Audit", color=C_NAVY, description="\n".join(lines))
         await ctx.reply(embed=b.build(), mention_author=False)
+
+    # ── lifecycle (owner only) ────────────────────────────────────────────────
+    @ai.command(name="restart", aliases=["reboot"])
+    @require_owner
+    async def ai_restart(self, ctx: ArchimedesContext) -> None:
+        """Gracefully restart the bot process (owner only)."""
+        await ctx.reply_success(
+            "Restarting now. I will be back online in a few seconds.",
+            title="Restart",
+        )
+        try:
+            if ctx.guild is not None:
+                await log_staff_action(
+                    ctx.db, scope=SCOPE_AI, guild_id=ctx.guild_id,
+                    actor_id=ctx.author.id, action="restart",
+                    severity=SEVERITY_WARN, details="owner-requested",
+                )
+        except Exception:  # noqa: BLE001
+            pass
+        self.bot.request_restart()
+        asyncio.create_task(self._delayed_close(1.0))
+
+    @ai.command(name="shutdown", aliases=["stop"])
+    @require_owner
+    async def ai_shutdown(self, ctx: ArchimedesContext) -> None:
+        """Gracefully shut the bot down (owner only)."""
+        if not await ctx.confirm("Shut the bot down? It will not auto-reconnect."):
+            await ctx.reply_error("Cancelled.")
+            return
+        await ctx.reply_success("Shutting down.", title="Shutdown")
+        try:
+            if ctx.guild is not None:
+                await log_staff_action(
+                    ctx.db, scope=SCOPE_AI, guild_id=ctx.guild_id,
+                    actor_id=ctx.author.id, action="shutdown",
+                    severity=SEVERITY_DANGER, details="owner-requested",
+                )
+        except Exception:  # noqa: BLE001
+            pass
+        self.bot.request_shutdown()
+        asyncio.create_task(self._delayed_close(1.0))
+
+    async def _delayed_close(self, delay: float) -> None:
+        """Close the bot after a short delay so the reply gets flushed."""
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            pass
+        try:
+            await self.bot.close()
+        except Exception:  # noqa: BLE001
+            log.exception("close after lifecycle command failed")
+
+    @app_commands.command(
+        name="restart",
+        description="Restart the bot (owner only).",
+    )
+    async def restart_slash(self, interaction: discord.Interaction) -> None:
+        """Slash counterpart for `.ai restart`."""
+        if not await self._is_owner(interaction.user):
+            await interaction.response.send_message(
+                "Only the bot owner can use this command.", ephemeral=True,
+            )
+            return
+        await interaction.response.send_message(
+            "Restarting now. I will be back online in a few seconds.",
+            ephemeral=True,
+        )
+        self.bot.request_restart()
+        asyncio.create_task(self._delayed_close(1.0))
+
+    async def _is_owner(self, user: discord.abc.User) -> bool:
+        if Config.OWNER_ID and int(user.id) == int(Config.OWNER_ID):
+            return True
+        try:
+            return await self.bot.is_owner(user)
+        except Exception:  # noqa: BLE001
+            return False
 
 
 async def setup(bot) -> None:
