@@ -5,7 +5,8 @@ nested subcommands), agent tools the model can call, and background loops,
 without touching any Python.
 
 Files in this directory are **bundled** plugins: they ship with the bot and
-are loaded on every boot. More plugins can be installed from the marketplace
+are loaded on every boot. Only `coinflip` ships bundled -- it is the worked
+example installed out of the box. More plugins install from the marketplace
 with `.ai plugins install <id>`.
 
 ## The plugin contract
@@ -303,6 +304,7 @@ picture can post it by replying with a card whose `image` is the result URL.
 
 ## Trying it
 
-See `coinflip.lua` for a complete worked example, and the `notes`, `tasks`,
-`events` and `groups` plugins for a full suite that shares one namespace.
-After editing a bundled file, run `.ai plugins reload <id>`.
+See `coinflip.lua` for a complete worked example. After editing a bundled
+file, run `.ai plugins reload <id>`. More plugins -- including a notes,
+tasks, events and groups productivity suite that shares one namespace --
+install from the marketplace with `.ai plugins install <id>`.

@@ -36,19 +36,17 @@ runs the test suite.
 - **File workspace** -- the `files.*` and `shell.run` tools give the model a
   private scratch directory, one per server (per user in a DM). It is
   sandboxed: paths cannot escape it, files and total size are capped, and the
-  shell runs only an allowlist of read-only commands. Configured with the
-  `WORKSPACE_*` variables; turn it off entirely with `WORKSPACE_ENABLED`.
+  shell runs only an allowlist of read-only commands -- it searches with
+  ripgrep, falling back to grep only when ripgrep cannot serve. Configured
+  with the `WORKSPACE_*` variables; turn it off entirely with
+  `WORKSPACE_ENABLED`.
 - **Lua plugins** -- a full plugin system. A plugin is one `.lua` file that
   can register prefix commands, agent tools, background loops and event
   handlers, and reach out through an HTTP client, a Discord read/write API,
-  document and key/value stores, and JSON utilities. Plugins install from a
-  GitHub marketplace, survive restarts, and are managed live with
-  `.ai plugins`.
-- **Productivity** -- private notes, tasks organised into to-do lists, and
-  calendar events with reminders, all delivered as bundled Lua plugins.
-  Personal items stay private (answered in your DMs); groups let members
-  share and collaborate, and any item can be shared, copied, moved or
-  transferred between users and groups.
+  document and key/value stores, and JSON utilities. The `coinflip` plugin
+  ships bundled as a worked example; more plugins -- a notes, tasks, events
+  and groups productivity suite among them -- install from a GitHub
+  marketplace, survive restarts, and are managed live with `.ai plugins`.
 - **Memory sidecar** -- long-term facts and episodes, passive learning in
   opted-in channels, and an append-only training corpus of every turn.
 - **Thread or inline replies** -- each member picks their style with
@@ -73,43 +71,15 @@ commands require the Manage Server permission.
 | `.arch ctx [@user\|server\|clear]` | everyone | Inspect / wipe learned context. |
 | `.arch save` / `saved` / `unsave` | everyone | Bookmark Archimedes answers. |
 | `.arch optin` / `optout` | everyone | AI context tracking. |
-| `.note` | everyone | Private notes (answered in your DMs). |
-| `.task` | everyone | Tasks and to-do lists, with optional reminders. |
-| `.event` | everyone | Calendar events with optional reminders. |
-| `.group` | everyone | Create groups, invite members, share and transfer items. |
-| `.coinflip` | everyone | Flip a coin (the example plugin). |
+| `.coinflip` | everyone | Flip a coin (the bundled example plugin). |
 | `.ai` | Manage Server | The AI control surface (see `.ai help`). |
 | `.ai plugins` | Manage Server | Install, update, enable and disable Lua plugins. |
 | `/help` or `.help` | everyone | A menu of sections, every command with examples. |
 | `.ping` / `.about` | everyone | Latency and bot info. |
 
-The `.note`, `.task`, `.event`, `.group` and `.coinflip` commands are not
-built in -- they come from bundled Lua plugins (see **Lua plugins** below).
-
-### Productivity, privacy and groups
-
-Notes, tasks and events each have an owner. Personal items are yours alone:
-the bot replies in your DMs and tidies the command message away, and personal
-data follows you across every server. Use `.note share <id> @user [edit]` to
-let specific people see one of your items.
-
-A **group** is a shared space. Create one with `.group create <name>`, invite
-members with `.group invite <id> @user`, and they accept with
-`.group join <id>`. Every member can see and edit the group's items, and group
-responses post in the channel so members see them. You can be in many groups.
-
-Targeting and moving items:
-
-- `#<groupid>` at the start of an `add` / `list` argument targets a group
-  (for example `.note add #5 Buy supplies`); no `#` means your personal space.
-- `~<list>` targets a task list (`.task add ~shopping milk`); the default
-  list is `general`.
-- `.note copy <id> <dest>` and `.note move <id> <dest>` accept `me`, an
-  `@user`, or `#<groupid>` as the destination. `.group duplicate <id>` clones
-  a whole group's items into a fresh group you own.
-- Reminders: `.task remind <id> in 2h` or `.event remind <id> 2026-06-01 14:30`.
-  Times accept relative offsets (`in 30m`, `in 3d`, `in 1w`) or absolute
-  `YYYY-MM-DD [HH:MM]` in UTC; a one-minute loop DMs you when one falls due.
+The `.coinflip` command is not built in -- it comes from the bundled
+`coinflip` Lua plugin (see **Lua plugins** below). Productivity commands like
+`.note`, `.task`, `.event` and `.group` install from the plugin marketplace.
 
 ## Setup
 
@@ -161,15 +131,15 @@ A plugin is a single `.lua` file. It can register prefix commands (with
 nested subcommand groups), agent tools the model can call, and background
 loops -- with no Python.
 
-Files in `plugins/` are **bundled** plugins, loaded on every boot: `notes`,
-`tasks`, `events` and `groups` are the productivity suite, and `coinflip` is
-a worked example. `plugins/README.md` documents the plugin contract and the
-`arch` / `ctx` API; the per-plugin document store means a plugin never writes
-SQL.
+The `plugins/` directory holds the **bundled** plugins, loaded on every
+boot. Only `coinflip` ships bundled -- a small, complete worked example.
+`plugins/README.md` documents the plugin contract and the `arch` / `ctx`
+API; the per-plugin document store means a plugin never writes SQL.
 
 More plugins install from a marketplace -- an ordinary GitHub repository
-(`hilleywyn/archimedes-plugins` by default). Server moderators manage every
-plugin with `.ai plugins`:
+(`hilleywyn/archimedes-plugins` by default) -- among them a notes, tasks,
+events and groups productivity suite. Server moderators manage every plugin
+with `.ai plugins`:
 
 | Command | What |
 |---|---|
@@ -260,7 +230,7 @@ ai/                  model client, memory, traits, context, tools, safety
 cogs/                chat brain, .arch, .ai admin, sidecar, meta
 agent-sidecar/       the OpenRouter Agent SDK service (TypeScript / Node)
 database/schema.sql  idempotent schema, applied on boot
-plugins/             bundled Lua plugins (notes, tasks, events, groups, coinflip)
+plugins/             bundled Lua plugins (coinflip, the worked example)
 tests/               offline smoke tests
 .github/workflows/   CI (lint + tests)
 Dockerfile           container build
