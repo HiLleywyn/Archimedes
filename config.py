@@ -41,6 +41,12 @@ def _env_float(key: str, default: float) -> float:
         return default
 
 
+def _env_list(key: str) -> list[str]:
+    """A comma-separated env var as a list of trimmed, non-empty items."""
+    raw = os.environ.get(key) or ""
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
 class Config:
     """Frozen, env-driven settings. Read-only at runtime."""
 
@@ -100,6 +106,18 @@ class Config:
     # an optional per-turn cost cap in US dollars (0 disables the cost cap).
     AGENT_MAX_STEPS: int = _env_int("AGENT_MAX_STEPS", 4)
     AGENT_MAX_COST: float = _env_float("AGENT_MAX_COST", 0.0)
+    # Sidecar provider routing and resilience, passed straight to the Agent
+    # SDK. AGENT_FALLBACK_MODELS is a comma-separated list of models the
+    # sidecar tries, in order, after the primary one. AGENT_PROVIDER_ORDER is
+    # a comma-separated list of provider slugs to prefer; AGENT_SERVER_TOOLS a
+    # comma-separated list of OpenRouter server-tool types to enable (they run
+    # server-side, no bridging). All default empty -- an unset deployment
+    # behaves exactly as before.
+    AGENT_FALLBACK_MODELS: list[str] = _env_list("AGENT_FALLBACK_MODELS")
+    AGENT_PROVIDER_ORDER: list[str] = _env_list("AGENT_PROVIDER_ORDER")
+    AGENT_PROVIDER_ALLOW_FALLBACKS: bool = _env_bool(
+        "AGENT_PROVIDER_ALLOW_FALLBACKS", True)
+    AGENT_SERVER_TOOLS: list[str] = _env_list("AGENT_SERVER_TOOLS")
 
     # ── Memory ────────────────────────────────────────────────────────────────
     MEMORY_REFRESH_HOURS: int = _env_int("MEMORY_REFRESH_HOURS", 4)
