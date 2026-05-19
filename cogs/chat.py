@@ -416,7 +416,7 @@ class ChatBrain(commands.Cog):
 
         async def _approver(name: str, args: dict) -> bool:
             return await self._collect_tool_approval(
-                channel_id, user_id, name, args)
+                placeholder.channel, user_id, name, args)
 
         tool_ctx.approver = _approver
         renderer = StreamRenderer(placeholder)
@@ -454,18 +454,19 @@ class ChatBrain(commands.Cog):
         return final_text or None
 
     async def _collect_tool_approval(
-        self, channel_id: int, user_id: int, name: str, args: dict,
+        self, channel, user_id: int, name: str, args: dict,
     ) -> bool:
         """Post an Approve / Reject prompt for one gated tool call.
 
-        Returns the human decision. A send failure or an unanswered prompt
-        counts as a refusal -- a gated tool is never run without an explicit
-        yes. The prompt message is edited in place with the outcome, so the
-        channel keeps a record of who cleared what.
+        ``channel`` is the channel the turn is replying in -- a guild channel,
+        a thread or a DM alike -- taken straight from the placeholder message,
+        so the prompt always lands where the user is looking and never depends
+        on a channel-cache lookup that misses for DMs. Returns the human
+        decision; a send failure or an unanswered prompt counts as a refusal,
+        so a gated tool is never run without an explicit yes. The prompt is
+        edited in place with the outcome, so the channel keeps a record of who
+        cleared what.
         """
-        channel = self.bot.get_channel(channel_id)
-        if channel is None:
-            return False
         timeout = float(max(5, Config.AGENT_APPROVAL_TIMEOUT_S))
         decision: asyncio.Future[bool] = (
             asyncio.get_running_loop().create_future()
