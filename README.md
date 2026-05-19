@@ -36,10 +36,10 @@ runs the test suite.
 - **File workspace** -- the `files.*` and `shell.run` tools give the model a
   private scratch directory, one per server (per user in a DM). It is
   sandboxed: paths cannot escape it, files and total size are capped, and the
-  shell runs only an allowlist of read-only commands -- it searches with
-  ripgrep, falling back to grep only when ripgrep cannot serve. Configured
-  with the `WORKSPACE_*` variables; turn it off entirely with
-  `WORKSPACE_ENABLED`.
+  shell runs only an allowlist of read-only commands -- it searches a
+  directory or the whole workspace with ripgrep and a single named file with
+  grep. Configured with the `WORKSPACE_*` variables; turn it off entirely
+  with `WORKSPACE_ENABLED`.
 - **Lua plugins** -- a full plugin system. A plugin is one `.lua` file that
   can register prefix commands, agent tools, background loops and event
   handlers, and reach out through an HTTP client, a Discord read/write API,
