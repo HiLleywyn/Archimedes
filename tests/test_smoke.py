@@ -68,8 +68,9 @@ def test_tool_registry_is_generic_only() -> None:
         "data.web_search", "vision.describe_image",
         "memory.remember_fact", "memory.recall_facts",
         "transform.slice", "transform.project", "transform.aggregate",
+        "image.generate", "video.generate",
     }
-    assert len(reg.as_openai_tools()) == 7
+    assert len(reg.as_openai_tools()) == 9
 
 
 def test_tool_schemas_declare_array_item_types() -> None:
@@ -134,6 +135,30 @@ def test_model_resolution_respects_backend() -> None:
         opt = cat.env_default()
         assert opt.provider in ("openrouter", "ollama")
         assert opt.model
+
+
+def test_image_and_video_are_model_categories() -> None:
+    from ai.models import TOOL_CATEGORIES, category
+
+    keys = {c.key for c in TOOL_CATEGORIES}
+    assert {"image", "video"} <= keys
+    # Generation always resolves to OpenRouter, even on the Ollama backend.
+    for key in ("image", "video"):
+        opt = category(key).env_default()
+        assert opt.provider == "openrouter"
+        assert opt.model
+
+
+def test_plugin_config_reads_namespaced_env(monkeypatch) -> None:
+    from config import Config
+
+    monkeypatch.setenv("PLUGIN_DEMO_API_KEY", "secret-key")
+    monkeypatch.setenv("PLUGIN_DEMO_MODEL", "  some-model  ")
+    monkeypatch.setenv("PLUGIN_OTHER_TOKEN", "not-mine")
+    cfg = Config.plugin_config("demo")
+    assert cfg == {"api_key": "secret-key", "model": "some-model"}
+    # A plugin sees only its own prefix, never another plugin's variables.
+    assert "token" not in cfg
 
 
 async def test_cogs_load_and_register_commands() -> None:
@@ -204,6 +229,24 @@ def test_card_to_embed_builds_within_limits() -> None:
     assert embed.title == "T"
     assert len(embed.fields) == 1
     assert len(embed) <= 6000
+
+
+def test_card_to_embed_supports_media() -> None:
+    from framework.plugins.api import card_to_embed
+
+    embed = card_to_embed({
+        "title": "Pic",
+        "image": "https://example.com/a.png",
+        "thumbnail": "https://example.com/t.png",
+        "url": "https://example.com/page",
+    })
+    assert embed.image.url == "https://example.com/a.png"
+    assert embed.thumbnail.url == "https://example.com/t.png"
+    assert embed.url == "https://example.com/page"
+
+    # A non-http value is ignored: a plugin cannot point an embed elsewhere.
+    safe = card_to_embed({"title": "X", "image": "file:///etc/passwd"})
+    assert safe.image.url is None
 
 
 def test_plugin_manifest_validation_rejects_bad_input() -> None:
@@ -528,6 +571,38 @@ async def test_tool_handler_receives_ctx() -> None:
     ctx = ToolContext(bot=None, db=None, user_id=42, guild_id=7, channel_id=9)
     result = await specs[0].handler({}, ctx)
     assert result == {"user": "42", "guild": "7", "dm": False}
+
+
+async def test_plugin_reads_namespaced_env_config(monkeypatch) -> None:
+    pytest.importorskip("lupa")
+
+    import asyncio
+
+    from ai.tools import ToolContext
+    from framework.plugins.api import LuaApi
+    from framework.plugins.runtime import compile_plugin
+
+    monkeypatch.setenv("PLUGIN_CFGPROBE_TOKEN", "env-token")
+    src = """
+    local M = {}
+    M.manifest = { id = "cfgprobe", name = "Cfg Probe", version = "1.0.0" }
+    M.tools = {
+      {
+        name = "probe.config",
+        description = "Echo the plugin env config back to the caller.",
+        parameters = { type = "object", properties = {} },
+        handler = function(args) return { token = arch.config.token } end,
+      },
+    }
+    return M
+    """
+    plugin = compile_plugin(src, expected_id="cfgprobe")
+    api = LuaApi(plugin, db=None, bot=None, loop=asyncio.get_running_loop())
+    api.activate()
+    specs = api.build_tools()
+    result = await specs[0].handler(
+        {}, ToolContext(bot=None, db=None, user_id=1, guild_id=1))
+    assert result == {"token": "env-token"}
 
 
 async def test_dm_message_routes_into_chat_pipeline() -> None:

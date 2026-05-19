@@ -142,6 +142,7 @@ Available inside every handler:
 |---|---|
 | `arch.store` | the document store (see below) |
 | `arch.kv` | the key/value store (see below) |
+| `arch.config` | operator settings for this plugin, from the environment |
 | `arch.colors` | named colour ints: `success`, `error`, `info`, `gold`, ... |
 | `arch.now()` | current UTC epoch (seconds) |
 | `arch.parse_time(text)` | parse `in 2h` / `2026-06-01 14:30` to an epoch, or `nil` |
@@ -265,6 +266,23 @@ arch.kv.clear()                          -- drop the whole namespace
 It shares the namespace (`manifest.storage`) with the document store, so a
 plugin suite shares its key/value space too.
 
+## Operator configuration
+
+`arch.config` is a read-only table of operator settings for the plugin,
+sourced from environment variables. Every `PLUGIN_<ID>_<KEY>` variable the bot
+is started with is exposed to plugin `<id>` as `config.<key>` (lower-cased):
+
+```lua
+-- with PLUGIN_GIT_TOKEN=ghp_xxx in the bot's environment, the `git` plugin
+-- sees this:
+local token = arch.config.token
+```
+
+A plugin sees only variables under its own prefix -- never another plugin's
+configuration, and never the bot's own secrets. `arch.config` suits an API
+key or endpoint an operator sets once at deploy time; the key/value store is
+better for settings a plugin changes at runtime.
+
 ## Card tables
 
 An embed is a plain table:
@@ -272,10 +290,16 @@ An embed is a plain table:
 ```lua
 {
   title = "...", description = "...", color = arch.colors.info,
-  footer = "...",
+  footer = "...", url = "https://...",
+  image = "https://...",      -- a large image below the body
+  thumbnail = "https://...",  -- a small image in the top corner
   fields = { { name = "Key", value = "Value", inline = true }, ... },
 }
 ```
+
+`image`, `thumbnail` and `url` accept an `http`/`https` URL only; any other
+value is ignored. `url` turns the title into a link. A tool that generates a
+picture can post it by replying with a card whose `image` is the result URL.
 
 ## Trying it
 

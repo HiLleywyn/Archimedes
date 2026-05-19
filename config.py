@@ -60,6 +60,11 @@ class Config:
     OPENROUTER_VISION_MODEL: str = _env("OPENROUTER_VISION_MODEL", "openai/gpt-4o-mini")
     OPENROUTER_TOOLS_MODEL: str = _env("OPENROUTER_TOOLS_MODEL")
     OPENROUTER_REASON_MODEL: str = _env("OPENROUTER_REASON_MODEL")
+    # Image and video generation models. Both run on OpenRouter regardless of
+    # CHAT_BACKEND -- the local Ollama backend has no equivalent.
+    OPENROUTER_IMAGE_MODEL: str = _env(
+        "OPENROUTER_IMAGE_MODEL", "google/gemini-2.5-flash-image-preview")
+    OPENROUTER_VIDEO_MODEL: str = _env("OPENROUTER_VIDEO_MODEL", "google/veo-3.1")
     OPENROUTER_REFERER: str = _env("OPENROUTER_REFERER", "https://github.com")
     OPENROUTER_TITLE: str = _env("OPENROUTER_TITLE", "Archimedes")
 
@@ -137,3 +142,20 @@ class Config:
                 "OLLAMA_BASE_URL is required when CHAT_BACKEND=ollama."
             )
         return problems
+
+    @classmethod
+    def plugin_config(cls, plugin_id: str) -> dict[str, str]:
+        """Operator configuration for one plugin, read from the environment.
+
+        A ``PLUGIN_<ID>_<KEY>`` environment variable is exposed to plugin
+        ``<id>`` as ``<key>`` (lower-cased): ``PLUGIN_IMAGEGEN_API_KEY``
+        reaches the ``imagegen`` plugin as ``config.api_key``. A plugin sees
+        only variables under its own prefix -- never another plugin's
+        configuration, and never the bot's own secrets.
+        """
+        prefix = "PLUGIN_" + plugin_id.upper().replace("-", "_") + "_"
+        out: dict[str, str] = {}
+        for key, value in os.environ.items():
+            if key.startswith(prefix) and value and value.strip():
+                out[key[len(prefix):].lower()] = value.strip()
+        return out

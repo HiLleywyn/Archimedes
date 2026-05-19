@@ -10,6 +10,8 @@ only generic, non-financial tools:
   * ``transform.slice``       -- deterministic top-N of a list
   * ``transform.project``     -- deterministic field selection on a list
   * ``transform.aggregate``   -- deterministic sum/min/max/mean/count
+  * ``image.generate``        -- generate an image (OpenRouter)
+  * ``video.generate``        -- generate a video (OpenRouter, asynchronous)
 
 Tools are registered with the :class:`ToolRegistry`; Lua plugins can register
 more through :class:`framework.plugins.manager.PluginManager`.
@@ -23,6 +25,8 @@ minimal JSON -- before the model is allowed to see it.
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 import json
 import logging
 import re
@@ -31,13 +35,19 @@ from dataclasses import dataclass
 from typing import Awaitable, Callable
 
 import aiohttp
+import discord
 
 from config import Config
-from ai.client import stream_completion, complete
+from ai.client import (
+    complete, download_media, generate_image, poll_video, stream_completion,
+    submit_video,
+)
 from ai.models import resolve_model
 from ai.safety import sanitize_context_snippet
+from framework.embed import card
 from framework.pipeline import run_pipeline
 from framework.pipeline.transforms import aggregate, project_fields, slice_items
+from framework.ui import C_ERROR, C_PURPLE
 
 log = logging.getLogger(__name__)
 
@@ -301,6 +311,162 @@ async def _transform_aggregate(args: dict, ctx: ToolContext) -> dict:
     )
 
 
+# ── Image and video generation tools ──────────────────────────────────────────
+# Both run on OpenRouter. The model is the `image` / `video` category of the
+# per-guild model picker, so `.ai model set image|video <slug>` retunes them.
+# Image generation is synchronous; video generation is slow and asynchronous,
+# so it is submitted here and a background task delivers it when it is ready.
+_video_tasks: set[asyncio.Task] = set()
+_VIDEO_POLL_INTERVAL = 15
+_VIDEO_POLL_DEADLINE = 15 * 60  # stop polling a job after fifteen minutes
+
+
+def _decode_data_url(url: str) -> bytes | None:
+    """Decode a ``data:...;base64,...`` URL into bytes, or ``None``."""
+    header, _, payload = url.partition(",")
+    if not payload or "base64" not in header:
+        return None
+    try:
+        return base64.b64decode(payload)
+    except (ValueError, TypeError):
+        return None
+
+
+async def _notify(bot, channel_id: int, title: str, message: str,
+                  color: int) -> None:
+    """Post a small status embed into a channel, ignoring delivery failure."""
+    channel = bot.get_channel(channel_id) if bot else None
+    if channel is None:
+        return
+    try:
+        await channel.send(
+            embed=card(title, description=message[:1900], color=color).build())
+    except discord.HTTPException:
+        pass
+
+
+async def _deliver_image(ctx: ToolContext, url: str, prompt: str,
+                         model: str) -> bool:
+    """Post a generated image into the conversation's channel."""
+    channel = (ctx.bot.get_channel(ctx.channel_id)
+               if ctx.bot and ctx.channel_id else None)
+    if channel is None:
+        return False
+    builder = card("Generated image", description=prompt[:400], color=C_PURPLE)
+    builder.footer(model)
+    try:
+        if url.startswith("data:"):
+            raw = _decode_data_url(url)
+            if raw is None:
+                return False
+            builder.image("attachment://image.png")
+            await channel.send(
+                embed=builder.build(),
+                file=discord.File(io.BytesIO(raw), filename="image.png"))
+        else:
+            builder.image(url)
+            await channel.send(embed=builder.build())
+        return True
+    except discord.HTTPException:
+        return False
+
+
+async def _deliver_video(bot, channel_id: int, url: str, prompt: str,
+                         model: str) -> None:
+    """Download a finished video and post it into the channel."""
+    channel = bot.get_channel(channel_id) if bot else None
+    if channel is None:
+        return
+    download = await download_media(url)
+    if download.get("error"):
+        await _notify(bot, channel_id, "Video generation finished",
+                      "The video was generated but could not be downloaded: "
+                      + str(download["error"]), C_ERROR)
+        return
+    builder = card("Generated video", description=prompt[:400], color=C_PURPLE)
+    builder.footer(model)
+    try:
+        await channel.send(
+            embed=builder.build(),
+            file=discord.File(io.BytesIO(download["data"]), filename="video.mp4"))
+    except discord.HTTPException as exc:
+        await _notify(bot, channel_id, "Video generation finished",
+                      f"The video was generated but could not be posted: {exc}",
+                      C_ERROR)
+
+
+async def _poll_video_job(bot, channel_id: int, polling_url: str,
+                          prompt: str, model: str) -> None:
+    """Poll a video job to completion, then deliver it to the channel."""
+    deadline = time.monotonic() + _VIDEO_POLL_DEADLINE
+    while time.monotonic() < deadline:
+        await asyncio.sleep(_VIDEO_POLL_INTERVAL)
+        status = await poll_video(polling_url)
+        state = str(status.get("status") or "").lower()
+        if state in ("completed", "succeeded"):
+            urls = status.get("unsigned_urls") or status.get("urls") or []
+            if isinstance(urls, str):
+                urls = [urls]
+            if urls:
+                await _deliver_video(bot, channel_id, str(urls[0]), prompt, model)
+            else:
+                await _notify(bot, channel_id, "Video generation finished",
+                              "The video completed but returned no file.",
+                              C_ERROR)
+            return
+        if state in ("failed", "canceled", "cancelled"):
+            await _notify(bot, channel_id, "Video generation failed",
+                          str(status.get("error") or "the job did not succeed"),
+                          C_ERROR)
+            return
+    await _notify(bot, channel_id, "Video generation timed out",
+                  "The video did not finish within fifteen minutes.", C_ERROR)
+
+
+async def _generate_image(args: dict, ctx: ToolContext) -> dict:
+    prompt = str(args.get("prompt") or "").strip()
+    if not prompt:
+        return {"error": "prompt is required"}
+    pick = await resolve_model(ctx.db, ctx.guild_id, "image")
+    result = await generate_image(prompt, model=pick.model)
+    if result.get("error"):
+        return {"error": result["error"]}
+    delivered = await _deliver_image(ctx, result["image"], prompt, pick.model)
+    return {
+        "ok": True,
+        "model": pick.model,
+        "delivered": delivered,
+        "note": ("The image has been posted into the channel as an embed."
+                 if delivered else
+                 "The image was generated but could not be posted."),
+    }
+
+
+async def _generate_video(args: dict, ctx: ToolContext) -> dict:
+    prompt = str(args.get("prompt") or "").strip()
+    if not prompt:
+        return {"error": "prompt is required"}
+    if ctx.bot is None or not ctx.channel_id:
+        return {"error": "video generation needs a channel to deliver to"}
+    pick = await resolve_model(ctx.db, ctx.guild_id, "video")
+    submission = await submit_video(prompt, model=pick.model)
+    if submission.get("error"):
+        return {"error": submission["error"]}
+    task = asyncio.create_task(_poll_video_job(
+        ctx.bot, int(ctx.channel_id), submission["polling_url"],
+        prompt, pick.model))
+    _video_tasks.add(task)
+    task.add_done_callback(_video_tasks.discard)
+    return {
+        "ok": True,
+        "model": pick.model,
+        "status": "submitted",
+        "note": "Video generation has started. It usually takes a few "
+                "minutes; the finished video is posted into this channel "
+                "automatically when ready. Tell the user it is on the way.",
+    }
+
+
 def build_default_registry() -> ToolRegistry:
     """Create a registry pre-loaded with the generic tool set."""
     reg = ToolRegistry()
@@ -389,6 +555,31 @@ def build_default_registry() -> ToolRegistry:
         }, "required": ["items", "op"]},
         _transform_aggregate, category="transform", risk=RISK_READ,
         result_fields=("op", "value", "count", "skipped"),
+    ))
+    reg.register(ToolSpec(
+        "image.generate",
+        "Generate an image from a text description and post it into the "
+        "channel. Use when a user asks you to draw, paint, create, make or "
+        "generate a picture or image.",
+        {"type": "object", "properties": {
+            "prompt": {"type": "string",
+                       "description": "A detailed description of the image."},
+        }, "required": ["prompt"]},
+        _generate_image, category="media", risk=RISK_SAFE,
+        result_fields=("ok", "model", "delivered", "note"),
+    ))
+    reg.register(ToolSpec(
+        "video.generate",
+        "Start generating a video from a text description. Video generation "
+        "is slow: this returns immediately and the finished video is posted "
+        "into the channel automatically when it is ready. Use when a user "
+        "asks you to make or generate a video.",
+        {"type": "object", "properties": {
+            "prompt": {"type": "string",
+                       "description": "A detailed description of the video."},
+        }, "required": ["prompt"]},
+        _generate_video, category="media", risk=RISK_SAFE,
+        result_fields=("ok", "model", "status", "note"),
     ))
     return reg
 
