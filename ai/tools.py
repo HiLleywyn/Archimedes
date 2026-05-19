@@ -98,6 +98,11 @@ class ToolSpec:
     top-level keys its ``data`` object is expected to carry. The processing
     pipeline filters the result down to those fields, so an unexpected key
     never drifts through to the model.
+
+    ``verbatim`` marks a tool whose output is the whole point -- a file read,
+    a shell capture. Its result skips the pipeline's string and list
+    compression so the model sees it whole, bounded only by the much larger
+    verbatim ceiling.
     """
 
     name: str
@@ -107,6 +112,7 @@ class ToolSpec:
     category: str = "misc"
     risk: str = RISK_READ
     result_fields: tuple[str, ...] | None = None
+    verbatim: bool = False
 
     def as_openai_tool(self) -> dict:
         return {
@@ -334,7 +340,10 @@ async def _transform_aggregate(args: dict, ctx: ToolContext) -> dict:
 # path is confined to one directory; the shell runs an allowlist of read-only
 # commands. The handlers are thin: all the confinement lives in ai.workspace.
 async def _files_read(args: dict, ctx: ToolContext) -> dict:
-    return workspace.read_file(ctx, args.get("path"))
+    return workspace.read_file(
+        ctx, args.get("path"),
+        offset=args.get("offset"), limit=args.get("limit"),
+    )
 
 
 async def _files_write(args: dict, ctx: ToolContext) -> dict:
@@ -588,14 +597,22 @@ def _register_workspace_tools(reg: ToolRegistry) -> None:
     reg.register(ToolSpec(
         "files.read",
         "Read a UTF-8 text file from your sandboxed workspace -- a private "
-        "scratch directory for this server. The path is relative to that "
-        "workspace.",
+        "scratch directory for this server. By default the whole file is "
+        "returned; pass offset (a 1-based line number) and limit (a line "
+        "count) to read a specific range of a large file. The path is "
+        "relative to the workspace.",
         {"type": "object", "properties": {
             "path": {"type": "string",
                      "description": "Workspace-relative path of the file."},
+            "offset": {"type": "integer",
+                       "description": "Optional 1-based line to start from."},
+            "limit": {"type": "integer",
+                      "description": "Optional maximum number of lines to "
+                                     "return."},
         }, "required": ["path"]},
-        _files_read, category="files", risk=RISK_READ,
-        result_fields=("path", "content", "bytes", "lines"),
+        _files_read, category="files", risk=RISK_READ, verbatim=True,
+        result_fields=("path", "content", "bytes", "total_lines",
+                       "start_line", "lines_returned", "more"),
     ))
     reg.register(ToolSpec(
         "files.write",
@@ -622,7 +639,7 @@ def _register_workspace_tools(reg: ToolRegistry) -> None:
             "path": {"type": "string",
                      "description": "Optional workspace-relative directory."},
         }},
-        _files_list, category="files", risk=RISK_READ,
+        _files_list, category="files", risk=RISK_READ, verbatim=True,
         result_fields=("path", "entries", "count"),
     ))
     reg.register(ToolSpec(
@@ -640,7 +657,7 @@ def _register_workspace_tools(reg: ToolRegistry) -> None:
             "ignore_case": {"type": "boolean",
                             "description": "Match case-insensitively."},
         }, "required": ["pattern"]},
-        _files_grep, category="files", risk=RISK_READ,
+        _files_grep, category="files", risk=RISK_READ, verbatim=True,
         result_fields=("pattern", "matches", "match_count",
                        "files_searched", "truncated"),
     ))
@@ -666,8 +683,9 @@ def _register_workspace_tools(reg: ToolRegistry) -> None:
                 "command": {"type": "string",
                             "description": "The command line to run."},
             }, "required": ["command"]},
-            _shell_run, category="shell", risk=RISK_SAFE,
+            _shell_run, category="shell", risk=RISK_SAFE, verbatim=True,
             result_fields=("command", "exit_code", "stdout", "stderr",
+                           "stdout_truncated", "stderr_truncated",
                            "elapsed_ms", "timed_out"),
         ))
 
@@ -977,6 +995,7 @@ async def _run_agent_inprocess(
                     name, result,
                     meta={"round": _round + 1, "elapsed_ms": elapsed_ms},
                     result_fields=spec.result_fields if spec else None,
+                    verbatim=spec.verbatim if spec else False,
                 )
                 data = piped.envelope.get("data")
                 if (name == "data.web_search" and isinstance(data, dict)

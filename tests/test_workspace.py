@@ -11,6 +11,8 @@ expose to an untrusted Discord caller.
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from ai import workspace
@@ -41,7 +43,8 @@ def test_write_then_read_round_trip(ws) -> None:
 
     read = workspace.read_file(ctx, "notes/todo.txt")
     assert read["content"] == "buy milk"
-    assert read["lines"] == 1
+    assert read["total_lines"] == 1
+    assert read["more"] is False
     assert read["path"] == "notes/todo.txt"
 
 
@@ -104,6 +107,66 @@ def test_delete_removes_a_file(ws) -> None:
 
 def test_reading_a_missing_file_is_a_clean_error(ws) -> None:
     assert "error" in workspace.read_file(_ctx(), "nope.txt")
+
+
+# ── reads are never silently truncated ────────────────────────────────────────
+def test_a_plain_read_returns_the_whole_file(ws) -> None:
+    ctx = _ctx()
+    body = "\n".join(f"line {i}" for i in range(1, 401))
+    workspace.write_file(ctx, "big.txt", body)
+    read = workspace.read_file(ctx, "big.txt")
+    assert read["content"] == body
+    assert read["total_lines"] == 400
+    assert read["lines_returned"] == 400
+    assert read["more"] is False
+
+
+def test_read_with_offset_and_limit_windows_the_file(ws) -> None:
+    ctx = _ctx()
+    workspace.write_file(ctx, "doc.txt",
+                         "\n".join(f"line{i}" for i in range(1, 11)))
+    window = workspace.read_file(ctx, "doc.txt", offset=3, limit=2)
+    assert window["content"] == "line3\nline4"
+    assert window["start_line"] == 3
+    assert window["lines_returned"] == 2
+    assert window["total_lines"] == 10
+    assert window["more"] is True
+
+    tail = workspace.read_file(ctx, "doc.txt", offset=9)
+    assert tail["content"] == "line9\nline10"
+    assert tail["more"] is False
+
+
+def test_read_offset_past_the_end_is_empty_not_an_error(ws) -> None:
+    ctx = _ctx()
+    workspace.write_file(ctx, "doc.txt", "a\nb")
+    past = workspace.read_file(ctx, "doc.txt", offset=99)
+    assert past["content"] == ""
+    assert past["lines_returned"] == 0
+    assert past["more"] is False
+
+
+def test_a_large_file_survives_the_pipeline_uncompressed(ws) -> None:
+    """A verbatim tool's result reaches the model whole, not trimmed.
+
+    Without the verbatim flag the pipeline would truncate the content field
+    to PIPELINE_MAX_STRING (1200 chars by default) -- this proves it does not.
+    """
+    from framework.pipeline import run_pipeline
+
+    ctx = _ctx()
+    body = "\n".join(f"line {i} with some text on it" for i in range(800))
+    assert len(body) > 4000  # well past both the string and inject defaults
+    workspace.write_file(ctx, "huge.txt", body)
+
+    spec = build_default_registry().get("files.read")
+    result = workspace.read_file(ctx, "huge.txt")
+    piped = run_pipeline("files.read", result,
+                         result_fields=spec.result_fields,
+                         verbatim=spec.verbatim)
+    payload = json.loads(piped.injected)
+    assert payload["data"]["content"] == body
+    assert "notes" not in payload  # nothing was trimmed
 
 
 # ── the sandbox: confinement and isolation ────────────────────────────────────

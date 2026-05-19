@@ -85,6 +85,14 @@ def _quota_bytes() -> int:
     return max(1, Config.WORKSPACE_QUOTA_KB) * 1024
 
 
+def _to_int(value, default: int) -> int:
+    """Coerce a tool argument to an int, or fall back to ``default``."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _dir_stats(ns_dir: Path) -> tuple[int, int]:
     """Total bytes and regular-file count currently under ``ns_dir``."""
     total = 0
@@ -125,8 +133,15 @@ def _rel(target: Path, base: Path) -> str:
 
 
 # ── file tools ────────────────────────────────────────────────────────────────
-def read_file(ctx, path: str) -> dict:
-    """Return the UTF-8 text contents of a workspace file."""
+def read_file(ctx, path: str, offset=None, limit=None) -> dict:
+    """Return the UTF-8 text contents of a workspace file.
+
+    With neither ``offset`` nor ``limit`` the whole file comes back. Pass
+    ``offset`` (a 1-based line number) and/or ``limit`` (a line count) to read
+    an explicit window of a large file instead. The result always reports
+    ``total_lines`` and whether ``more`` lines follow the window, so a big
+    file is read deliberately -- never trimmed by surprise.
+    """
     try:
         ns_dir = namespace_dir(ctx)
         target = _resolve(ns_dir, path)
@@ -146,12 +161,28 @@ def read_file(ctx, path: str) -> dict:
         raw = target.read_bytes()
     except OSError as exc:
         return {"error": f"could not read {path}: {exc}"}
+
     text = raw.decode("utf-8", "replace")
+    lines = text.splitlines()
+    total_lines = len(lines)
+    rel = _rel(target, ns_dir.resolve())
+    if offset is None and limit is None:
+        # No window asked for: hand back the file exactly as it is on disk.
+        return {
+            "path": rel, "content": text, "bytes": size,
+            "total_lines": total_lines, "start_line": 1,
+            "lines_returned": total_lines, "more": False,
+        }
+    start = max(1, _to_int(offset, 1))
+    if limit is None:
+        window = lines[start - 1:]
+    else:
+        window = lines[start - 1:start - 1 + max(0, _to_int(limit, 0))]
     return {
-        "path": _rel(target, ns_dir.resolve()),
-        "content": text,
-        "bytes": size,
-        "lines": text.count("\n") + 1 if text else 0,
+        "path": rel, "content": "\n".join(window), "bytes": size,
+        "total_lines": total_lines, "start_line": start,
+        "lines_returned": len(window),
+        "more": start - 1 + len(window) < total_lines,
     }
 
 
@@ -352,7 +383,7 @@ _BLOCKED_TOKENS = frozenset({
     "-fprint", "-fprint0", "-fprintf", "-fls",
 })
 _SHELL_METACHARS = (";", "|", "&", ">", "<", "`", "$(", "${", "\n")
-_SHELL_OUTPUT_CHARS = 8000
+_SHELL_OUTPUT_CHARS = 64000
 _SHELL_MAX_COMMAND_CHARS = 600
 _SHELL_MAX_ARGS = 40
 
@@ -432,11 +463,15 @@ async def run_shell(ctx, command: str) -> dict:
         except (OSError, ValueError):
             pass
         return {"error": f"the command did not finish within {timeout}s"}
+    out = stdout.decode("utf-8", "replace")
+    err = stderr.decode("utf-8", "replace")
     return {
         "command": raw,
         "exit_code": proc.returncode,
-        "stdout": stdout.decode("utf-8", "replace")[:_SHELL_OUTPUT_CHARS],
-        "stderr": stderr.decode("utf-8", "replace")[:_SHELL_OUTPUT_CHARS],
+        "stdout": out[:_SHELL_OUTPUT_CHARS],
+        "stderr": err[:_SHELL_OUTPUT_CHARS],
+        "stdout_truncated": len(out) > _SHELL_OUTPUT_CHARS,
+        "stderr_truncated": len(err) > _SHELL_OUTPUT_CHARS,
         "elapsed_ms": int((time.monotonic() - started) * 1000),
         "timed_out": False,
     }

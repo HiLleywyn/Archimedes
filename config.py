@@ -157,6 +157,12 @@ class Config:
     PIPELINE_MAX_STRING: int = _env_int("PIPELINE_MAX_STRING", 1200)
     PIPELINE_MAX_LIST: int = _env_int("PIPELINE_MAX_LIST", 25)
     PIPELINE_INJECT_MAX_CHARS: int = _env_int("PIPELINE_INJECT_MAX_CHARS", 4000)
+    # The ceiling for a verbatim tool -- one whose output is the point, like a
+    # workspace file read or a shell capture. Such a result skips string and
+    # list compression and uses this (much larger) ceiling instead, so the
+    # model sees it whole rather than trimmed to a snippet.
+    PIPELINE_VERBATIM_MAX_CHARS: int = _env_int(
+        "PIPELINE_VERBATIM_MAX_CHARS", 200000)
 
     # ── Agent file workspace ──────────────────────────────────────────────────
     # The files.* and shell.run agent tools operate inside a sandboxed

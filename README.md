@@ -238,6 +238,11 @@ context window.
 out: pure, non-model tools for the list work the model would otherwise do by
 eye -- top-N, field selection, and sum / min / max / mean / count.
 
+A tool whose output *is* the point -- a workspace file read, a shell capture
+-- is marked **verbatim**: it skips string and list compression and uses a
+much larger injection ceiling, so the model sees the file or command output
+whole instead of trimmed to a snippet.
+
 The pipeline lives in `framework/pipeline/`; the compression caps are tunable
 through the `PIPELINE_*` environment variables.
 

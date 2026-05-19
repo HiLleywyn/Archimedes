@@ -84,10 +84,19 @@ class PipelineResult:
 
 
 def _options(result_fields: tuple[str, ...] | None,
-             options: ProcessingOptions | None) -> ProcessingOptions:
-    """Build the processing options, taking compression caps from Config."""
-    if options is not None:
-        return options
+             verbatim: bool) -> ProcessingOptions:
+    """Build the processing options, taking compression caps from Config.
+
+    A ``verbatim`` tool -- one whose output is the whole point, like a
+    workspace file read or a shell capture -- is exempt from string and list
+    compression: its caps are lifted to the verbatim ceiling, so the model
+    sees the result whole instead of trimmed down to a snippet.
+    """
+    if verbatim:
+        cap = max(64, Config.PIPELINE_VERBATIM_MAX_CHARS)
+        return ProcessingOptions(
+            max_string=cap, max_list=cap, result_fields=result_fields,
+        )
     return ProcessingOptions(
         max_string=max(64, Config.PIPELINE_MAX_STRING),
         max_list=max(1, Config.PIPELINE_MAX_LIST),
@@ -102,6 +111,7 @@ def run_pipeline(
     meta: dict | None = None,
     result_fields: tuple[str, ...] | None = None,
     options: ProcessingOptions | None = None,
+    verbatim: bool = False,
 ) -> PipelineResult:
     """Run a raw tool return value through the whole pipeline.
 
@@ -110,18 +120,25 @@ def run_pipeline(
     and round number). ``result_fields``, when given, is the tool's declared
     result schema -- the processing stage filters ``data`` to those fields.
 
+    ``verbatim`` lifts the compression caps and the injection ceiling for a
+    tool whose output must not be trimmed (a file read, a shell capture), so
+    its result reaches the model whole.
+
     The return value is a :class:`PipelineResult`; ``.injected`` is the string
     to put in the ``role: tool`` message.
     """
     envelope = wrap_result(tool, raw, meta=meta)
     envelope = validate_envelope(envelope)
-    opts = _options(result_fields, options)
-    if options is not None and result_fields is not None:
-        opts.result_fields = result_fields
+    if options is None:
+        opts = _options(result_fields, verbatim)
+    else:
+        opts = options
+        if result_fields is not None:
+            opts.result_fields = result_fields
     envelope = process_envelope(envelope, opts)
-    injected = format_envelope(
-        envelope, max_chars=max(256, Config.PIPELINE_INJECT_MAX_CHARS),
-    )
+    inject_max = (Config.PIPELINE_VERBATIM_MAX_CHARS if verbatim
+                  else Config.PIPELINE_INJECT_MAX_CHARS)
+    injected = format_envelope(envelope, max_chars=max(256, inject_max))
     return PipelineResult(
         envelope=envelope,
         injected=injected,
