@@ -181,6 +181,7 @@ class LuaApi:
         arch = {
             "store": store,
             "kv": kv,
+            "config": Config.plugin_config(self._plugin.manifest.id),
             "colors": dict(COLORS),
             "now": lambda: int(dt.datetime.now(dt.timezone.utc).timestamp()),
             "parse_time": lambda text: parse_time_to_epoch(_s(text)),

@@ -8,6 +8,9 @@ Exposed surface:
   * ``complete``          -- one-shot non-streaming completion -> str
   * ``complete_default``  -- ``complete`` with the default chat model
   * ``stream_completion`` -- async generator of streaming events
+  * ``generate_image``    -- one image from an OpenRouter image model
+  * ``submit_video`` / ``poll_video`` -- the async OpenRouter video API
+  * ``download_media``    -- fetch generated media bytes with the API key
   * ``close_client``      -- shut the shared aiohttp session down
 
 A concurrency semaphore caps in-flight requests so a burst of chat traffic
@@ -224,3 +227,162 @@ async def stream_completion(
         "tool_calls": [tool_calls[i] for i in sorted(tool_calls)],
         "usage": usage,
     }
+
+
+# ── OpenRouter image and video generation ────────────────────────────────────
+# Image and video generation always go through OpenRouter, whatever
+# CHAT_BACKEND is. Image generation is one synchronous chat-completions call
+# with an image modality; video generation is OpenRouter's asynchronous
+# ``/videos`` API -- submit, then poll.
+def _openrouter_base() -> str:
+    return Config.OPENROUTER_BASE_URL.rstrip("/")
+
+
+def _openrouter_headers() -> dict:
+    """Headers for a direct OpenRouter call (not the configurable backend)."""
+    headers = {
+        "Content-Type": "application/json",
+        "HTTP-Referer": Config.OPENROUTER_REFERER,
+        "X-Title": Config.OPENROUTER_TITLE,
+    }
+    if Config.OPENROUTER_API_KEY:
+        headers["Authorization"] = f"Bearer {Config.OPENROUTER_API_KEY}"
+    return headers
+
+
+def _api_error(data, status: int) -> str:
+    """Pull a human-readable message out of an API error response."""
+    if isinstance(data, dict):
+        err = data.get("error")
+        if isinstance(err, dict):
+            return str(err.get("message") or err.get("code") or f"http {status}")
+        if err:
+            return str(err)
+        if data.get("message"):
+            return str(data["message"])
+    return f"http {status}"
+
+
+async def generate_image(prompt: str, *, model: str, timeout: float = 120.0) -> dict:
+    """Generate one image from an OpenRouter image-output model.
+
+    Returns ``{"image": <data-or-http url>}`` on success, or
+    ``{"error": "..."}`` on failure.
+    """
+    if not Config.OPENROUTER_API_KEY:
+        return {"error": "OPENROUTER_API_KEY is not configured"}
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "modalities": ["image", "text"],
+    }
+    async with _sem():
+        session = await _get_session()
+        try:
+            async with session.post(
+                f"{_openrouter_base()}/chat/completions",
+                headers=_openrouter_headers(), json=payload,
+                timeout=aiohttp.ClientTimeout(total=timeout),
+            ) as resp:
+                data = await resp.json(content_type=None)
+                if resp.status != 200:
+                    log.warning("image generation http %s", resp.status)
+                    return {"error": _api_error(data, resp.status)}
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            return {"error": f"image request failed: {exc}"}
+        except ValueError:
+            return {"error": "the image API returned an unreadable response"}
+    try:
+        message = data["choices"][0]["message"]
+    except (KeyError, IndexError, TypeError):
+        return {"error": "the image model returned no message"}
+    for image in message.get("images") or []:
+        if not isinstance(image, dict):
+            continue
+        url = (image.get("image_url") or {}).get("url")
+        if url:
+            return {"image": url}
+    return {"error": "the image model returned no image"}
+
+
+async def submit_video(prompt: str, *, model: str, timeout: float = 60.0) -> dict:
+    """Submit a video generation job to OpenRouter's async ``/videos`` API.
+
+    Returns ``{"id": ..., "polling_url": ...}`` on success, ``{"error": ...}``
+    on failure.
+    """
+    if not Config.OPENROUTER_API_KEY:
+        return {"error": "OPENROUTER_API_KEY is not configured"}
+    async with _sem():
+        session = await _get_session()
+        try:
+            async with session.post(
+                f"{_openrouter_base()}/videos",
+                headers=_openrouter_headers(),
+                json={"model": model, "prompt": prompt},
+                timeout=aiohttp.ClientTimeout(total=timeout),
+            ) as resp:
+                data = await resp.json(content_type=None)
+                if resp.status not in (200, 201, 202):
+                    log.warning("video submit http %s", resp.status)
+                    return {"error": _api_error(data, resp.status)}
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            return {"error": f"video request failed: {exc}"}
+        except ValueError:
+            return {"error": "the video API returned an unreadable response"}
+    job_id = data.get("id") if isinstance(data, dict) else None
+    polling_url = data.get("polling_url") if isinstance(data, dict) else None
+    if not job_id or not polling_url:
+        return {"error": "the video API returned no job"}
+    return {"id": str(job_id), "polling_url": str(polling_url)}
+
+
+async def poll_video(polling_url: str, *, timeout: float = 30.0) -> dict:
+    """Poll one video job once. Returns the raw status dict, or ``{"error": ...}``."""
+    async with _sem():
+        session = await _get_session()
+        try:
+            async with session.get(
+                polling_url, headers=_openrouter_headers(),
+                timeout=aiohttp.ClientTimeout(total=timeout),
+            ) as resp:
+                data = await resp.json(content_type=None)
+                if resp.status != 200:
+                    return {"error": _api_error(data, resp.status)}
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            return {"error": f"poll failed: {exc}"}
+        except ValueError:
+            return {"error": "the video API returned an unreadable response"}
+    return data if isinstance(data, dict) else {"error": "bad poll response"}
+
+
+async def download_media(
+    url: str, *, max_bytes: int = 25 * 1024 * 1024, timeout: float = 180.0,
+) -> dict:
+    """Download generated-media bytes, authenticating with the OpenRouter key.
+
+    Returns ``{"data": bytes}`` on success, or ``{"error": "..."}``.
+    """
+    headers = {}
+    if Config.OPENROUTER_API_KEY:
+        headers["Authorization"] = f"Bearer {Config.OPENROUTER_API_KEY}"
+    async with _sem():
+        session = await _get_session()
+        try:
+            async with session.get(
+                url, headers=headers,
+                timeout=aiohttp.ClientTimeout(total=timeout),
+            ) as resp:
+                if resp.status != 200:
+                    return {"error": f"download http {resp.status}"}
+                chunks: list[bytes] = []
+                total = 0
+                async for chunk in resp.content.iter_chunked(65536):
+                    total += len(chunk)
+                    if total > max_bytes:
+                        return {"error": f"media exceeds the "
+                                         f"{max_bytes // (1024 * 1024)}MB limit"}
+                    chunks.append(chunk)
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            return {"error": f"download failed: {exc}"}
+    return {"data": b"".join(chunks)}

@@ -26,9 +26,11 @@ runs the test suite.
   time-decayed trait profile (curious, technical, blunt, upbeat, ...), durable
   key/value facts, and per-channel activity context. Every reply gets richer.
 - **Tool calling** -- the model can call generic, non-financial tools: web
-  search, image description, remember / recall facts, and deterministic list
-  transforms. Every tool result is run through a strict execution pipeline
-  before the model sees it (see **Tool execution pipeline**).
+  search, image description, image and video generation, remember / recall
+  facts, and deterministic list transforms. Image and video generation run on
+  OpenRouter and are retunable per server with `.ai model set image|video`.
+  Every tool result is run through a strict execution pipeline before the
+  model sees it (see **Tool execution pipeline**).
 - **Lua plugins** -- a full plugin system. A plugin is one `.lua` file that
   can register prefix commands, agent tools, background loops and event
   handlers, and reach out through an HTTP client, a Discord read/write API,

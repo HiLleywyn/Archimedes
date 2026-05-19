@@ -29,6 +29,12 @@ class Category:
     description: str
 
     def env_default(self) -> ModelOption:
+        # Image and video generation always run on OpenRouter -- the local
+        # Ollama backend has no equivalent, so these ignore CHAT_BACKEND.
+        if self.key == "image":
+            return ModelOption("openrouter", Config.OPENROUTER_IMAGE_MODEL)
+        if self.key == "video":
+            return ModelOption("openrouter", Config.OPENROUTER_VIDEO_MODEL)
         provider = Config.CHAT_BACKEND
         if provider == "ollama":
             return ModelOption("ollama", Config.OLLAMA_MODEL)
@@ -48,6 +54,8 @@ TOOL_CATEGORIES: tuple[Category, ...] = (
     Category("vision", "Vision", "Image understanding (describe attachments)."),
     Category("search", "Search", "Summarising web-search results."),
     Category("reason", "Reason", "Heavier multi-step reasoning."),
+    Category("image", "Image", "Image generation from a prompt."),
+    Category("video", "Video", "Video generation from a prompt."),
 )
 
 # A small curated catalog surfaced by .ai model show. Purely advisory.
@@ -72,6 +80,15 @@ _CATALOG: dict[str, list[ModelOption]] = {
     "reason": [
         ModelOption("openrouter", "anthropic/claude-3.5-sonnet", "Claude 3.5 Sonnet"),
         ModelOption("openrouter", "openai/o4-mini", "o4-mini"),
+    ],
+    "image": [
+        ModelOption("openrouter", "google/gemini-2.5-flash-image-preview",
+                    "Gemini 2.5 Flash Image"),
+        ModelOption("openrouter", "openai/gpt-4o", "GPT-4o (image output)"),
+    ],
+    "video": [
+        ModelOption("openrouter", "google/veo-3.1", "Google Veo 3.1"),
+        ModelOption("openrouter", "alibaba/wan-2.7", "Alibaba Wan 2.7"),
     ],
 }
 
