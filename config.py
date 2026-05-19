@@ -63,8 +63,9 @@ class Config:
     # Image and video generation models. Both run on OpenRouter regardless of
     # CHAT_BACKEND -- the local Ollama backend has no equivalent.
     OPENROUTER_IMAGE_MODEL: str = _env(
-        "OPENROUTER_IMAGE_MODEL", "google/gemini-2.5-flash-image-preview")
-    OPENROUTER_VIDEO_MODEL: str = _env("OPENROUTER_VIDEO_MODEL", "google/veo-3.1")
+        "OPENROUTER_IMAGE_MODEL", "x-ai/grok-imagine-image-quality")
+    OPENROUTER_VIDEO_MODEL: str = _env(
+        "OPENROUTER_VIDEO_MODEL", "x-ai/grok-imagine-video")
     OPENROUTER_REFERER: str = _env("OPENROUTER_REFERER", "https://github.com")
     OPENROUTER_TITLE: str = _env("OPENROUTER_TITLE", "Archimedes")
 

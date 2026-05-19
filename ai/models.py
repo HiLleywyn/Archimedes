@@ -82,13 +82,13 @@ _CATALOG: dict[str, list[ModelOption]] = {
         ModelOption("openrouter", "openai/o4-mini", "o4-mini"),
     ],
     "image": [
-        ModelOption("openrouter", "google/gemini-2.5-flash-image-preview",
-                    "Gemini 2.5 Flash Image"),
-        ModelOption("openrouter", "openai/gpt-4o", "GPT-4o (image output)"),
+        ModelOption("openrouter", "x-ai/grok-imagine-image-quality",
+                    "Grok Imagine -- image"),
     ],
     "video": [
+        ModelOption("openrouter", "x-ai/grok-imagine-video",
+                    "Grok Imagine -- video"),
         ModelOption("openrouter", "google/veo-3.1", "Google Veo 3.1"),
-        ModelOption("openrouter", "alibaba/wan-2.7", "Alibaba Wan 2.7"),
     ],
 }
 
