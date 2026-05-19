@@ -36,12 +36,13 @@ import re
 import time
 from dataclasses import dataclass
 from typing import Awaitable, Callable
+from uuid import uuid4
 
 import aiohttp
 import discord
 
 from config import Config
-from ai.agent_sidecar import AgentSidecarUnavailable
+from ai.agent_sidecar import AgentSidecarUnavailable, log_agent_turn
 from ai.client import (
     complete, download_media, generate_image, poll_video, stream_completion,
     submit_video,
@@ -695,25 +696,40 @@ async def run_agent_stream(
     plus ``{"type": "tool_start"|"tool_done", "tool": name}`` while a tool
     runs and ``{"type": "reset"}`` when a tool round clears the visible
     buffer. The terminal ``done`` event carries ``tool_names`` used.
+
+    A per-turn correlation id is generated here and threaded through both
+    paths, so the structured turn event and the sidecar's own log lines join
+    on one ``turn_id``.
     """
+    turn_id = uuid4().hex[:12]
     sidecar = getattr(getattr(ctx, "bot", None), "agent_sidecar", None)
+    served_by_sidecar = False
     if sidecar is not None and sidecar.available:
         try:
             async for ev in sidecar.run_stream(
                 messages, ctx, model=model, max_tokens=max_tokens,
                 temperature=temperature, tools_override=tools_override,
+                turn_id=turn_id,
             ):
                 yield ev
-            return
+            served_by_sidecar = True
         except AgentSidecarUnavailable as exc:
             log.warning("agent sidecar unavailable (%s); using in-process loop",
                         exc)
 
+    if served_by_sidecar:
+        if sidecar is not None:
+            sidecar.note_turn_path("sidecar")
+        return
+
     async for ev in _run_agent_inprocess(
         messages, ctx, model=model, max_tokens=max_tokens,
         temperature=temperature, tools_override=tools_override,
+        turn_id=turn_id,
     ):
         yield ev
+    if sidecar is not None:
+        sidecar.note_turn_path("in_process")
 
 
 async def _run_agent_inprocess(
@@ -724,6 +740,7 @@ async def _run_agent_inprocess(
     max_tokens: int = 600,
     temperature: float = 0.85,
     tools_override: list[dict] | None = None,
+    turn_id: str = "",
 ):
     """Stream a chat turn that may call tools, entirely in this process.
 
@@ -739,86 +756,95 @@ async def _run_agent_inprocess(
 
     convo = list(messages)
     tool_names: list[str] = []
+    started_turn = time.monotonic()
 
-    for _round in range(max(1, Config.AGENT_MAX_STEPS)):
-        done_event: dict | None = None
-        async for ev in stream_completion(
-            convo, model=model, max_tokens=max_tokens,
-            temperature=temperature, tools=tool_schemas or None,
-        ):
-            kind = ev.get("type")
-            if kind == "delta":
-                yield ev
-            elif kind == "error":
-                yield ev
+    try:
+        for _round in range(max(1, Config.AGENT_MAX_STEPS)):
+            done_event: dict | None = None
+            async for ev in stream_completion(
+                convo, model=model, max_tokens=max_tokens,
+                temperature=temperature, tools=tool_schemas or None,
+            ):
+                kind = ev.get("type")
+                if kind == "delta":
+                    yield ev
+                elif kind == "error":
+                    yield ev
+                    return
+                elif kind == "done":
+                    done_event = ev
+
+            if done_event is None:
+                yield {"type": "error", "error": "empty_response"}
                 return
-            elif kind == "done":
-                done_event = ev
 
-        if done_event is None:
-            yield {"type": "error", "error": "empty_response"}
-            return
+            calls = done_event.get("tool_calls") or []
+            if not calls or registry is None:
+                yield {
+                    "type": "done",
+                    "text": done_event.get("text", ""),
+                    "finish_reason": done_event.get("finish_reason", ""),
+                    "usage": done_event.get("usage", {}),
+                    "tool_names": tool_names,
+                }
+                return
 
-        calls = done_event.get("tool_calls") or []
-        if not calls or registry is None:
-            yield {
-                "type": "done",
-                "text": done_event.get("text", ""),
-                "finish_reason": done_event.get("finish_reason", ""),
-                "usage": done_event.get("usage", {}),
-                "tool_names": tool_names,
-            }
-            return
-
-        # The model wants tools. Drop whatever streamed so far -- the real
-        # answer comes after the tool results land.
-        yield {"type": "reset"}
-        convo.append({
-            "role": "assistant",
-            "content": done_event.get("text") or None,
-            "tool_calls": calls,
-        })
-        for tc in calls:
-            name = tc.get("function", {}).get("name", "")
-            raw_args = tc.get("function", {}).get("arguments") or "{}"
-            try:
-                args = json.loads(raw_args)
-            except json.JSONDecodeError:
-                args = {}
-            yield {"type": "tool_start", "tool": name}
-            started = time.monotonic()
-            result = await registry.run(name, args, ctx)
-            elapsed_ms = int((time.monotonic() - started) * 1000)
-            tool_names.append(name)
-
-            # The result does not go to the model raw. The pipeline wraps it
-            # in the contract envelope, runs it through the validation gate,
-            # compresses it deterministically and reduces it to minimal JSON.
-            spec = registry.get(name)
-            piped = run_pipeline(
-                name, result,
-                meta={"round": _round + 1, "elapsed_ms": elapsed_ms},
-                result_fields=spec.result_fields if spec else None,
-            )
-            data = piped.envelope.get("data")
-            if (name == "data.web_search" and isinstance(data, dict)
-                    and data.get("results")):
-                yield {"type": "sources", "results": data["results"]}
-            yield {"type": "tool_done", "tool": name}
+            # The model wants tools. Drop whatever streamed so far -- the real
+            # answer comes after the tool results land.
+            yield {"type": "reset"}
             convo.append({
-                "role": "tool",
-                "tool_call_id": tc.get("id", ""),
-                "content": piped.injected,
+                "role": "assistant",
+                "content": done_event.get("text") or None,
+                "tool_calls": calls,
             })
+            for tc in calls:
+                name = tc.get("function", {}).get("name", "")
+                raw_args = tc.get("function", {}).get("arguments") or "{}"
+                try:
+                    args = json.loads(raw_args)
+                except json.JSONDecodeError:
+                    args = {}
+                yield {"type": "tool_start", "tool": name}
+                started = time.monotonic()
+                result = await registry.run(name, args, ctx)
+                elapsed_ms = int((time.monotonic() - started) * 1000)
+                tool_names.append(name)
 
-    # Tool-round budget exhausted -- ask for a final plain answer.
-    final = await complete(
-        convo, model=model, max_tokens=max_tokens, temperature=temperature,
-    )
-    yield {
-        "type": "done",
-        "text": final or "",
-        "finish_reason": "tool_limit",
-        "usage": {},
-        "tool_names": tool_names,
-    }
+                # The result does not go to the model raw. The pipeline wraps
+                # it in the contract envelope, runs it through the validation
+                # gate, compresses it deterministically and reduces it to
+                # minimal JSON.
+                spec = registry.get(name)
+                piped = run_pipeline(
+                    name, result,
+                    meta={"round": _round + 1, "elapsed_ms": elapsed_ms},
+                    result_fields=spec.result_fields if spec else None,
+                )
+                data = piped.envelope.get("data")
+                if (name == "data.web_search" and isinstance(data, dict)
+                        and data.get("results")):
+                    yield {"type": "sources", "results": data["results"]}
+                yield {"type": "tool_done", "tool": name}
+                convo.append({
+                    "role": "tool",
+                    "tool_call_id": tc.get("id", ""),
+                    "content": piped.injected,
+                })
+
+        # Tool-round budget exhausted -- ask for a final plain answer.
+        final = await complete(
+            convo, model=model, max_tokens=max_tokens, temperature=temperature,
+        )
+        yield {
+            "type": "done",
+            "text": final or "",
+            "finish_reason": "tool_limit",
+            "usage": {},
+            "tool_names": tool_names,
+        }
+    finally:
+        log_agent_turn(
+            turn_id, "in_process", connect_ms=0,
+            model_ms=int((time.monotonic() - started_turn) * 1000),
+            tool_count=len(tool_names), model=model,
+        )

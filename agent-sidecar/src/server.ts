@@ -5,12 +5,17 @@
  * tool-calling loop (callModel) on behalf of the Python bot. The bot speaks a
  * compact JSON protocol over one WebSocket per chat turn:
  *
- *   bot  -> sidecar : { type: "start", model, messages, tools, ... }
+ *   sidecar -> bot  : { type: "hello", protocol_version, sdk_version }
+ *   bot  -> sidecar : { type: "start", protocol_version, turn_id, model, ... }
  *   sidecar -> bot  : { type: "delta", text }              streamed model text
  *   sidecar -> bot  : { type: "tool_call", call_id, name, arguments }
  *   bot  -> sidecar : { type: "tool_result", call_id, result }
  *   sidecar -> bot  : { type: "done", text, finish_reason, usage, tool_names }
  *   sidecar -> bot  : { type: "error", error }
+ *
+ * Every connection opens with a hello frame, so the two halves can confirm
+ * they speak the same wire-protocol version before a turn is committed; a
+ * mismatch fails the turn over to the bot's in-process loop.
  *
  * Tools live in the Python bot, so every tool the SDK invokes is bridged back
  * over the same socket: the SDK calls execute(), the sidecar emits a
@@ -18,6 +23,9 @@
  * registry, the execution pipeline and the Lua plugins exactly where they are.
  */
 import { createServer } from 'node:http';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { WebSocketServer, WebSocket, type RawData } from 'ws';
 import {
   OpenRouter,
@@ -32,8 +40,39 @@ const HOST = process.env.AGENT_SIDECAR_HOST || '127.0.0.1';
 const PORT = Number(process.env.AGENT_SIDECAR_PORT || '8770');
 const API_KEY = process.env.OPENROUTER_API_KEY || '';
 
+/**
+ * Wire-protocol version. Bump this whenever a message shape changes. The bot
+ * sends its own version in the start frame and receives this one in the hello
+ * frame; either side treats a mismatch as a reason to fall back rather than
+ * risk talking past a half-deployed peer.
+ */
+const PROTOCOL_VERSION = 1;
+
+/** Best-effort version of the bundled Agent SDK, surfaced for logs only. */
+function readSdkVersion(): string {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const pkgPath = join(
+      here, '..', 'node_modules', '@openrouter', 'agent', 'package.json',
+    );
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as {
+      version?: unknown;
+    };
+    if (typeof pkg.version === 'string' && pkg.version) {
+      return pkg.version;
+    }
+  } catch {
+    // The SDK version is a log field, not a gate -- 'unknown' is acceptable.
+  }
+  return 'unknown';
+}
+
+const SDK_VERSION = readSdkVersion();
+
 interface StartMessage {
   type: 'start';
+  protocol_version?: number | null;
+  turn_id?: string | null;
   model?: string | null;
   messages?: unknown[];
   temperature?: number | null;
@@ -55,7 +94,18 @@ function errorMessage(err: unknown): string {
   return String(err);
 }
 
-/** One chat turn: drives callModel and bridges tool calls back to the bot. */
+/**
+ * One chat turn: drives callModel and bridges tool calls back to the bot.
+ *
+ * The sidecar is deliberately stateless per turn -- it opens one WebSocket,
+ * runs one turn and closes. Conversation history, memory and traits all live
+ * in the Python bot. The Agent SDK also offers a stateful mode (a persistent
+ * turn-state accessor and approval-gated tool pausing); the bridge does NOT
+ * use it, because that would split one turn's state across two runtimes.
+ * Anything stateful belongs on the Python side. A build guard
+ * (tests/test_sidecar_guards.py) fails CI if that surface appears here -- if a
+ * future change genuinely needs it, that guard must be revisited deliberately.
+ */
 class Session {
   private readonly ws: WebSocket;
   private readonly client: OpenRouter;
@@ -63,6 +113,7 @@ class Session {
   private readonly toolNames: string[] = [];
   private callCounter = 0;
   private started = false;
+  private turnId = '-';
 
   constructor(ws: WebSocket, client: OpenRouter) {
     this.ws = ws;
@@ -70,12 +121,24 @@ class Session {
     ws.on('message', (data) => this.onMessage(data));
     ws.on('close', () => this.failPending(new Error('connection closed')));
     ws.on('error', () => this.failPending(new Error('connection error')));
+    // Greet every connection so the bot can verify the protocol version
+    // before it commits a turn to this sidecar.
+    this.send({
+      type: 'hello',
+      protocol_version: PROTOCOL_VERSION,
+      sdk_version: SDK_VERSION,
+    });
   }
 
   private send(payload: Record<string, unknown>): void {
     if (this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(payload));
     }
+  }
+
+  /** Log a line tagged with this turn's correlation id. */
+  private log(text: string): void {
+    console.log(`[turn ${this.turnId}] ${text}`);
   }
 
   private failPending(reason: unknown): void {
@@ -100,7 +163,25 @@ class Session {
         return;
       }
       this.started = true;
+      if (typeof msg.turn_id === 'string' && msg.turn_id) {
+        this.turnId = msg.turn_id;
+      }
+      const peer = msg.protocol_version;
+      if (typeof peer === 'number' && peer !== PROTOCOL_VERSION) {
+        this.log(
+          `protocol mismatch: bot v${peer}, sidecar v${PROTOCOL_VERSION}`,
+        );
+        this.send({
+          type: 'error',
+          error:
+            `protocol version mismatch (sidecar v${PROTOCOL_VERSION}, ` +
+            `bot v${peer})`,
+        });
+        this.ws.close();
+        return;
+      }
       this.run(msg as StartMessage).catch((err) => {
+        this.log(`error: ${errorMessage(err)}`);
         this.send({ type: 'error', error: errorMessage(err) });
         this.failPending(err);
         this.ws.close();
@@ -146,6 +227,7 @@ class Session {
   private async run(msg: StartMessage): Promise<void> {
     const messages = Array.isArray(msg.messages) ? msg.messages : [];
     const tools = this.buildTools(Array.isArray(msg.tools) ? msg.tools : []);
+    this.log(`start model=${msg.model || 'default'} tools=${tools.length}`);
 
     const request: Record<string, unknown> = {
       input: fromChatMessages(messages as any),
@@ -200,6 +282,10 @@ class Session {
       // Usage is best-effort; a missing response object is not fatal.
     }
 
+    this.log(
+      `done tools=${this.toolNames.length} ` +
+      `finish=${finishReason || 'stop'} text_len=${text.length}`,
+    );
     this.send({
       type: 'done',
       text,
@@ -233,7 +319,10 @@ function main(): void {
   });
 
   httpServer.listen(PORT, HOST, () => {
-    console.log(`agent-sidecar: listening on ws://${HOST}:${PORT}/agent`);
+    console.log(
+      `agent-sidecar: listening on ws://${HOST}:${PORT}/agent ` +
+      `(protocol v${PROTOCOL_VERSION}, sdk ${SDK_VERSION})`,
+    );
   });
 
   const shutdown = (): void => {
