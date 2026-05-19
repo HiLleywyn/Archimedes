@@ -52,6 +52,18 @@ def test_output_sanitizer_strips_pings_and_links() -> None:
     assert "@everyone" not in cleaned
 
 
+def test_sanitize_input_keeps_urls_only_when_asked() -> None:
+    from ai.safety import sanitize_input
+
+    msg = "summarize https://example.com/page for me"
+    # The default still strips links -- used for ambient and context snippets.
+    assert "example.com" not in sanitize_input(msg)
+    # The chat question keeps the URL so the model can act on it with a tool.
+    assert "https://example.com/page" in sanitize_input(msg, keep_urls=True)
+    # Pings are still neutralised even when URLs are kept.
+    assert "@everyone" not in sanitize_input("yo @everyone", keep_urls=True)
+
+
 def test_acrostic_guard() -> None:
     from ai.safety import looks_like_acrostic
 

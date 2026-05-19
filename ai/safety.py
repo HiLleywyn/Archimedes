@@ -142,13 +142,22 @@ def sanitize_output(text: str, guild: "discord.Guild | None" = None) -> str:
     return text.strip()
 
 
-def sanitize_input(text: str) -> str:
-    """Scrub user input: neutralise pings, links and slurs, then truncate."""
+def sanitize_input(text: str, *, keep_urls: bool = False) -> str:
+    """Scrub user input: neutralise pings, links and slurs, then truncate.
+
+    With ``keep_urls`` the URLs the user typed are preserved. The chat
+    pipeline needs this for the question itself: a user may ask the bot to
+    act on a link with a tool (web fetch, GitHub lookups), and the model
+    cannot do that if the URL has been stripped before it arrives. The
+    model's *output* is still scrubbed of links by :func:`sanitize_output`,
+    so a preserved input URL can never be echoed back into a channel.
+    """
     if not text:
         return ""
-    text = _MD_IMAGE_RE.sub("", text)
-    text = _MD_LINK_RE.sub(r"\1", text)
-    text = _URL_RE.sub("", text)
+    if not keep_urls:
+        text = _MD_IMAGE_RE.sub("", text)
+        text = _MD_LINK_RE.sub(r"\1", text)
+        text = _URL_RE.sub("", text)
     text = re.sub(r"<@!?\d+>", "@user", text)
     text = re.sub(r"<@&\d+>", "@role", text)
     text = re.sub(r"<#\d+>", "#channel", text)
