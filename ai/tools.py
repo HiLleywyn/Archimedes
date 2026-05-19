@@ -17,10 +17,13 @@ Tools are registered with the :class:`ToolRegistry`; Lua plugins can register
 more through :class:`framework.plugins.manager.PluginManager`.
 
 ``run_agent_stream`` is the orchestrator: the control plane that routes the
-model to tools and back. Every tool result it collects is run through the
-:mod:`framework.pipeline` -- wrapped in the strict contract envelope,
-validated by the Pydantic gate, deterministically compressed, and reduced to
-minimal JSON -- before the model is allowed to see it.
+model to tools and back. It runs the turn one of two ways -- through the
+OpenRouter Agent SDK sidecar when one is reachable (see :mod:`ai.agent_sidecar`),
+otherwise through the in-process loop ``_run_agent_inprocess`` defined here.
+Both paths run every tool result through the :mod:`framework.pipeline` --
+wrapped in the strict contract envelope, validated by the Pydantic gate,
+deterministically compressed, and reduced to minimal JSON -- before the model
+is allowed to see it.
 """
 from __future__ import annotations
 
@@ -38,6 +41,7 @@ import aiohttp
 import discord
 
 from config import Config
+from ai.agent_sidecar import AgentSidecarUnavailable
 from ai.client import (
     complete, download_media, generate_image, poll_video, stream_completion,
     submit_video,
@@ -50,8 +54,6 @@ from framework.pipeline.transforms import aggregate, project_fields, slice_items
 from framework.ui import C_ERROR, C_PURPLE
 
 log = logging.getLogger(__name__)
-
-MAX_TOOL_ROUNDS = 4
 
 # Risk tiers. The agent loop never exposes ``danger`` tools.
 RISK_READ = "read"
@@ -687,10 +689,45 @@ async def run_agent_stream(
 ):
     """Stream a chat turn that may call tools.
 
-    Yields the same event vocabulary as :func:`ai.client.stream_completion`
+    Routes the turn through the OpenRouter Agent SDK sidecar when one is
+    reachable, falling back to the in-process loop when it is not. Either way
+    it yields the same event vocabulary as :func:`ai.client.stream_completion`
     plus ``{"type": "tool_start"|"tool_done", "tool": name}`` while a tool
     runs and ``{"type": "reset"}`` when a tool round clears the visible
     buffer. The terminal ``done`` event carries ``tool_names`` used.
+    """
+    sidecar = getattr(getattr(ctx, "bot", None), "agent_sidecar", None)
+    if sidecar is not None and sidecar.available:
+        try:
+            async for ev in sidecar.run_stream(
+                messages, ctx, model=model, max_tokens=max_tokens,
+                temperature=temperature, tools_override=tools_override,
+            ):
+                yield ev
+            return
+        except AgentSidecarUnavailable as exc:
+            log.warning("agent sidecar unavailable (%s); using in-process loop",
+                        exc)
+
+    async for ev in _run_agent_inprocess(
+        messages, ctx, model=model, max_tokens=max_tokens,
+        temperature=temperature, tools_override=tools_override,
+    ):
+        yield ev
+
+
+async def _run_agent_inprocess(
+    messages: list[dict],
+    ctx: ToolContext,
+    *,
+    model: str | None = None,
+    max_tokens: int = 600,
+    temperature: float = 0.85,
+    tools_override: list[dict] | None = None,
+):
+    """Stream a chat turn that may call tools, entirely in this process.
+
+    The fallback agent loop, used when the Agent SDK sidecar is not reachable.
     """
     registry = ctx.registry
     if registry is None:
@@ -703,7 +740,7 @@ async def run_agent_stream(
     convo = list(messages)
     tool_names: list[str] = []
 
-    for _round in range(MAX_TOOL_ROUNDS):
+    for _round in range(max(1, Config.AGENT_MAX_STEPS)):
         done_event: dict | None = None
         async for ev in stream_completion(
             convo, model=model, max_tokens=max_tokens,

@@ -46,11 +46,12 @@ class ArchimedesBot(commands.Bot):
             ),
         )
         self.db = Database(Config.DATABASE_URL)
-        self.short_term = None  # ai.redis_store.ShortTermStore
-        self.memory = None      # ai.memory.MemoryService
-        self.tools = None       # ai.tools.ToolRegistry
-        self.training = None    # ai.training.TrainingLogger
-        self.plugins = None     # framework.plugins.PluginManager
+        self.short_term = None    # ai.redis_store.ShortTermStore
+        self.memory = None        # ai.memory.MemoryService
+        self.tools = None         # ai.tools.ToolRegistry
+        self.training = None      # ai.training.TrainingLogger
+        self.plugins = None       # framework.plugins.PluginManager
+        self.agent_sidecar = None  # ai.agent_sidecar.AgentSidecar
         # Bounded ring of message ids the bot sent as AI replies. Used to
         # tell "user replied to one of my answers" from "user replied to
         # someone else" without a DB round-trip.
@@ -61,6 +62,7 @@ class ArchimedesBot(commands.Bot):
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
     async def setup_hook(self) -> None:
+        from ai.agent_sidecar import AgentSidecar
         from ai.memory import MemoryService
         from ai.redis_store import ShortTermStore
         from ai.tools import build_default_registry
@@ -73,6 +75,15 @@ class ArchimedesBot(commands.Bot):
         self.memory = MemoryService(self.db, self.short_term)
         self.training = TrainingLogger(self.db)
         self.tools = build_default_registry()
+
+        # The agent loop prefers the OpenRouter Agent SDK sidecar; starting it
+        # never blocks the bot -- a failure here just leaves the in-process
+        # loop in charge.
+        self.agent_sidecar = AgentSidecar()
+        try:
+            await self.agent_sidecar.start()
+        except Exception:  # noqa: BLE001
+            log.exception("agent sidecar failed to start")
 
         for ext in COGS:
             try:
@@ -109,6 +120,11 @@ class ArchimedesBot(commands.Bot):
         try:
             if self.plugins is not None:
                 await self.plugins.shutdown()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if self.agent_sidecar is not None:
+                await self.agent_sidecar.stop()
         except Exception:  # noqa: BLE001
             pass
         try:
