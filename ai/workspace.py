@@ -371,10 +371,12 @@ def delete_file(ctx, path: str) -> dict:
 # ── allowlist shell tool ──────────────────────────────────────────────────────
 # Read-only commands only. The command is executed directly (no shell), so a
 # pipe or redirect is never interpreted -- it is just a literal argument.
+# rg (ripgrep) is the preferred content search; grep, egrep and fgrep stay on
+# the allowlist only as a fallback for the rare case ripgrep cannot serve.
 _SHELL_ALLOWLIST = frozenset({
-    "ls", "cat", "head", "tail", "wc", "grep", "egrep", "fgrep", "find",
-    "pwd", "echo", "date", "stat", "sort", "uniq", "cut", "tr", "nl",
-    "basename", "dirname", "du", "diff",
+    "ls", "cat", "head", "tail", "wc", "rg", "grep", "egrep", "fgrep",
+    "find", "pwd", "echo", "date", "stat", "sort", "uniq", "cut", "tr",
+    "nl", "basename", "dirname", "du", "diff",
 })
 # find actions (and their write-to-file siblings) run another program or
 # write outside a relative path -- never allowed, whatever the command is.

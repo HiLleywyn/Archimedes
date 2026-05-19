@@ -14,8 +14,11 @@ FROM python:3.12-slim-bookworm
 
 WORKDIR /app
 
+# ripgrep backs the agent shell tool's content search; grep stays as a
+# fallback. ca-certificates and libstdc++6 are runtime dependencies.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates libstdc++6 \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates libstdc++6 ripgrep \
     && rm -rf /var/lib/apt/lists/*
 
 # The Node runtime, lifted from the build image, runs the agent sidecar.

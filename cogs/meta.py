@@ -54,7 +54,7 @@ def build_help_categories(p: str) -> dict[str, list[discord.Embed]]:
             f"**Chat** -- `@`mention Archimedes or reply to one of its "
             f"messages.\n"
             f"**Commands** -- prefix commands start with `{p}` "
-            f"(for example `{p}note`, `{p}task`).",
+            f"(for example `{p}help`, `{p}coinflip`).",
         )
         .field(
             "Bot meta",
@@ -64,9 +64,9 @@ def build_help_categories(p: str) -> dict[str, list[discord.Embed]]:
         )
         .field(
             "Good to know",
-            "Personal notes, tasks and events are private: Archimedes "
-            "answers them in your DMs and tidies the command away. Group "
-            "items are shared and answered in the channel.",
+            "Archimedes can be extended with Lua plugins that add extra "
+            "commands and tools. Server moderators install them; see the "
+            "Plugins section below.",
         ),
     ], "Getting started")
 
@@ -171,31 +171,25 @@ def build_help_categories(p: str) -> dict[str, list[discord.Embed]]:
             "Plugins",
             color=C_TEAL,
             description=(
-                "Most of what Archimedes does for you -- notes, tasks, "
-                "calendar events, shareable groups -- is delivered by Lua "
-                "plugins. The Notes, Tasks, Events and Groups sections of "
-                "this menu are generated live from the plugins installed "
-                "right now, so the help always matches what is loaded."
+                "Archimedes is extended with Lua plugins -- each one adds "
+                "prefix commands, agent tools the model can call, or both. "
+                "The `coinflip` plugin ships built in as a worked example; "
+                "this menu grows a live section for every plugin that is "
+                "loaded, so the help always matches what is installed."
             ),
         )
         .field(
-            "Scope tokens",
-            f"`#<groupid>` at the start of an `add` / `list` argument files "
-            f"the item in a group; no `#` means your personal space.\n"
-            f"`~<list>` picks a task list (the default list is `general`).\n"
-            f"Example: `{p}task add #5 ~launch ship the build`",
+            "What a plugin adds",
+            "A plugin can register prefix commands you run yourself and "
+            "agent tools Archimedes calls for you mid-conversation. Every "
+            "loaded plugin gets its own section in this menu.",
         )
         .field(
-            "Private vs shared",
-            "Personal notes, tasks and events are answered in your DMs and "
-            "the command message is tidied away. Group items are shared with "
-            "every member and answered in the channel.",
-        )
-        .field(
-            "Time formats",
-            "Relative: `in 30m`, `in 2h`, `in 3d`, `in 1w`. "
-            "Absolute (UTC): `2026-06-01` or `2026-06-01 14:30`. "
-            "Tasks and events can carry a reminder that DMs you when due.",
+            "The marketplace",
+            f"Beyond the built-in `coinflip`, more plugins -- a notes, "
+            f"tasks, events and groups productivity suite among them -- "
+            f"install from the marketplace. Browse it with "
+            f"`{p}ai plugins search`.",
         )
         .field(
             "Managing plugins",
@@ -258,8 +252,8 @@ class Meta(commands.Cog):
         """The static help plus a live section for every loaded plugin.
 
         Plugin sections slot in right after the static ``Plugins`` page so
-        the menu reads: built-in topics, then one section per installed
-        plugin (Notes, Tasks, ...), then the staff controls.
+        the menu reads: built-in topics, then one section per loaded plugin
+        (coinflip, plus anything installed), then the staff controls.
         """
         prefix = Config.PREFIX
         static = build_help_categories(prefix)

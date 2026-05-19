@@ -29,7 +29,7 @@ _MODULES = [
 ]
 
 # The plugin files that ship in plugins/ and load on every boot.
-_BUNDLED_PLUGINS = ["coinflip", "events", "groups", "notes", "tasks"]
+_BUNDLED_PLUGINS = ["coinflip"]
 
 
 @pytest.mark.parametrize("module", _MODULES)
@@ -311,37 +311,36 @@ def test_bundled_plugins_compile() -> None:
         assert plugin.manifest.version
 
 
-def test_productivity_plugins_share_a_namespace() -> None:
-    pytest.importorskip("lupa")
-    import os
-
-    from framework.plugins.runtime import compile_plugin
-
-    plugin_dir = os.path.join(os.path.dirname(__file__), "..", "plugins")
-    for plugin_id in ("notes", "tasks", "events", "groups"):
-        path = os.path.join(plugin_dir, f"{plugin_id}.lua")
-        with open(path, "r", encoding="utf-8") as fh:
-            plugin = compile_plugin(fh.read(), expected_id=plugin_id)
-        assert plugin.manifest.storage == "productivity"
-
-
 def test_plugin_builds_a_command_tree() -> None:
     pytest.importorskip("lupa")
-    import os
 
     from framework.plugins.api import LuaApi, build_commands
     from framework.plugins.runtime import compile_plugin
 
-    path = os.path.join(os.path.dirname(__file__), "..", "plugins", "notes.lua")
-    with open(path, "r", encoding="utf-8") as fh:
-        plugin = compile_plugin(fh.read(), expected_id="notes")
+    src = """
+    local M = {}
+    M.manifest = { id = "tree", name = "Tree", version = "1.0.0" }
+    M.commands = {
+      {
+        name = "tree",
+        summary = "A command group.",
+        run = function(ctx) end,
+        subcommands = {
+          { name = "add",  summary = "Add.",  run = function(ctx) end },
+          { name = "list", summary = "List.", run = function(ctx) end },
+        },
+      },
+    }
+    return M
+    """
+    plugin = compile_plugin(src, expected_id="tree")
     api = LuaApi(plugin, db=None, bot=None, loop=None)
     commands = build_commands(api, plugin)
     assert len(commands) == 1
-    note = commands[0]
-    assert note.name == "note"
-    sub_names = {c.name for c in note.commands}
-    assert {"add", "list", "show", "share", "move"} <= sub_names
+    root = commands[0]
+    assert root.name == "tree"
+    sub_names = {c.name for c in root.commands}
+    assert {"add", "list"} <= sub_names
 
 
 class _FakeDB:
@@ -402,18 +401,15 @@ async def test_plugin_manager_loads_bundled_plugins() -> None:
         assert bot.plugins.loaded_count == len(_BUNDLED_PLUGINS)
         # The single gateway-event dispatcher cog is registered on startup.
         assert bot.get_cog("PluginEventDispatcher") is not None
-        # Productivity command groups are now plugin-provided.
-        for name in ("note", "task", "event", "group"):
-            assert bot.get_command(name) is not None
-        assert bot.get_command("task add") is not None
-        assert bot.get_command("group invite") is not None
-        # A plugin can register an agent tool too.
+        # The bundled coinflip plugin registers a prefix command...
+        assert bot.get_command("coinflip") is not None
+        # ...and an agent tool the model can call.
         assert bot.tools.get("fun.coinflip") is not None
-        # Disabling a plugin tears its commands back out.
-        await bot.plugins.disable("notes")
-        assert bot.get_command("note") is None
-        await bot.plugins.enable("notes")
-        assert bot.get_command("note") is not None
+        # Disabling a plugin tears its command back out.
+        await bot.plugins.disable("coinflip")
+        assert bot.get_command("coinflip") is None
+        await bot.plugins.enable("coinflip")
+        assert bot.get_command("coinflip") is not None
     finally:
         await bot.plugins.shutdown()
         await bot.close()

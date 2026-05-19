@@ -677,8 +677,11 @@ def _register_workspace_tools(reg: ToolRegistry) -> None:
         reg.register(ToolSpec(
             "shell.run",
             "Run a single read-only shell command inside your sandboxed "
-            "workspace, for example ls, cat, grep, find, wc, head, tail or "
-            "sort. Commands take a file path as a direct argument -- "
+            "workspace, for example ls, cat, rg, find, wc, head, tail or "
+            "sort. To search file contents always use rg (ripgrep) -- it is "
+            "the preferred search tool; only fall back to grep, egrep or "
+            "fgrep if ripgrep fails or genuinely cannot do what you need. "
+            "Commands take a file path as a direct argument -- "
             "'sort -r data.txt', 'wc -l data.txt' -- so you do NOT need "
             "pipes or redirects, which are not supported. To save a "
             "command's output to a file, pass save_to instead of using '>'. "
@@ -687,6 +690,7 @@ def _register_workspace_tools(reg: ToolRegistry) -> None:
             {"type": "object", "properties": {
                 "command": {"type": "string",
                             "description": "The command line to run, e.g. "
+                                           "'rg TODO src' or "
                                            "'sort -r data.txt'."},
                 "save_to": {"type": "string",
                             "description": "Optional workspace-relative file "
