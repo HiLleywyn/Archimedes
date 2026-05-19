@@ -263,22 +263,57 @@ def _api_error(data, status: int) -> str:
     return f"http {status}"
 
 
-async def generate_image(prompt: str, *, model: str, timeout: float = 120.0) -> dict:
-    """Generate one image from an OpenRouter image-output model.
+# Image generation options safe to forward to any image model. Per-model
+# exotic options (Recraft styles and colours, Sourceful fonts, ...) are left
+# out -- a model that does not support one would reject the whole request.
+_IMAGE_ASPECT_RATIOS = frozenset({
+    "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "16:9", "9:16", "21:9",
+})
+_IMAGE_SIZES = frozenset({"1K", "2K", "4K"})
 
-    Returns ``{"image": <data-or-http url>}`` on success, or
-    ``{"error": "..."}`` on failure.
+
+async def generate_image(
+    prompt: str,
+    *,
+    model: str,
+    aspect_ratio: str | None = None,
+    image_size: str | None = None,
+    input_image: str | None = None,
+    timeout: float = 120.0,
+) -> dict:
+    """Generate one or more images from an OpenRouter image-output model.
+
+    ``aspect_ratio`` and ``image_size`` shape the output. ``input_image`` (an
+    http(s) URL) switches on image-to-image: the model edits or restyles that
+    image rather than generating from the prompt alone.
+
+    Returns ``{"images": [url, ...]}`` on success (each a data or http URL),
+    or ``{"error": "..."}`` on failure.
     """
     if not Config.OPENROUTER_API_KEY:
         return {"error": "OPENROUTER_API_KEY is not configured"}
-    payload = {
+
+    content: object = prompt
+    if input_image:
+        content = [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": input_image}},
+        ]
+    payload: dict = {
         "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        # Image-only: a generation model has no text output, and asking for
-        # text alongside it leaves OpenRouter with no matching endpoint (a
-        # "no endpoints found" 404).
+        "messages": [{"role": "user", "content": content}],
+        # Image-only output: a generation model has no text to return, and
+        # asking for text leaves OpenRouter with no matching endpoint.
         "modalities": ["image"],
     }
+    image_config: dict = {}
+    if aspect_ratio in _IMAGE_ASPECT_RATIOS:
+        image_config["aspect_ratio"] = aspect_ratio
+    if image_size in _IMAGE_SIZES:
+        image_config["image_size"] = image_size
+    if image_config:
+        payload["image_config"] = image_config
+
     async with _sem():
         session = await _get_session()
         try:
@@ -297,40 +332,82 @@ async def generate_image(prompt: str, *, model: str, timeout: float = 120.0) -> 
             return {"error": f"image request failed: {exc}"}
         except ValueError:
             return {"error": "the image API returned an unreadable response"}
+
     try:
         message = data["choices"][0]["message"]
     except (KeyError, IndexError, TypeError):
         return {"error": "the image model returned no message"}
+    urls: list[str] = []
     for image in message.get("images") or []:
         if not isinstance(image, dict):
             continue
         url = (image.get("image_url") or {}).get("url")
         if url:
-            return {"image": url}
-    return {"error": "the image model returned no image"}
+            urls.append(str(url))
+    if not urls:
+        return {"error": "the image model returned no image"}
+    return {"images": urls}
 
 
-async def submit_video(prompt: str, *, model: str, timeout: float = 60.0) -> dict:
+# Video generation options safe to forward to any video model.
+_VIDEO_ASPECT_RATIOS = frozenset({
+    "16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3", "21:9", "9:21",
+})
+_VIDEO_RESOLUTIONS = frozenset({"480p", "720p", "1080p", "1K", "2K", "4K"})
+
+
+async def submit_video(
+    prompt: str,
+    *,
+    model: str,
+    aspect_ratio: str | None = None,
+    resolution: str | None = None,
+    duration: int | None = None,
+    generate_audio: bool | None = None,
+    first_frame: str | None = None,
+    timeout: float = 60.0,
+) -> dict:
     """Submit a video generation job to OpenRouter's async ``/videos`` API.
+
+    ``aspect_ratio``, ``resolution`` and ``duration`` shape the output;
+    ``generate_audio`` toggles a soundtrack; ``first_frame`` (an http(s) URL)
+    switches on image-to-video, using that image as the opening frame.
 
     Returns ``{"id": ..., "polling_url": ...}`` on success, ``{"error": ...}``
     on failure.
     """
     if not Config.OPENROUTER_API_KEY:
         return {"error": "OPENROUTER_API_KEY is not configured"}
+
+    payload: dict = {"model": model, "prompt": prompt}
+    if aspect_ratio in _VIDEO_ASPECT_RATIOS:
+        payload["aspect_ratio"] = aspect_ratio
+    if resolution in _VIDEO_RESOLUTIONS:
+        payload["resolution"] = resolution
+    if isinstance(duration, int) and duration > 0:
+        payload["duration"] = duration
+    if generate_audio is not None:
+        payload["generate_audio"] = bool(generate_audio)
+    if first_frame:
+        payload["frame_images"] = [{
+            "type": "image_url",
+            "image_url": {"url": first_frame},
+            "frame_type": "first_frame",
+        }]
+
     async with _sem():
         session = await _get_session()
         try:
             async with session.post(
                 f"{_openrouter_base()}/videos",
-                headers=_openrouter_headers(),
-                json={"model": model, "prompt": prompt},
+                headers=_openrouter_headers(), json=payload,
                 timeout=aiohttp.ClientTimeout(total=timeout),
             ) as resp:
                 data = await resp.json(content_type=None)
                 if resp.status not in (200, 201, 202):
-                    log.warning("video submit http %s", resp.status)
-                    return {"error": _api_error(data, resp.status)}
+                    message = _api_error(data, resp.status)
+                    log.warning("video submit http %s: %s", resp.status, message)
+                    return {"error": message}
         except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
             return {"error": f"video request failed: {exc}"}
         except ValueError:

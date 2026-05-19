@@ -319,6 +319,22 @@ async def _transform_aggregate(args: dict, ctx: ToolContext) -> dict:
 _video_tasks: set[asyncio.Task] = set()
 _VIDEO_POLL_INTERVAL = 15
 _VIDEO_POLL_DEADLINE = 15 * 60  # stop polling a job after fifteen minutes
+_MAX_IMAGES = 4  # most a single generation call will post into a channel
+
+
+def _opt_text(value) -> str | None:
+    """A trimmed, non-empty string argument, or ``None``."""
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _opt_url(value) -> str | None:
+    """An http(s) URL argument, or ``None`` if it is not one."""
+    text = _opt_text(value)
+    if text and text.startswith(("http://", "https://")):
+        return text
+    return None
 
 
 def _decode_data_url(url: str) -> bytes | None:
@@ -345,34 +361,42 @@ async def _notify(bot, channel_id: int, title: str, message: str,
         pass
 
 
-async def _deliver_image(ctx: ToolContext, url: str, prompt: str,
-                         model: str) -> bool:
-    """Post a generated image into the conversation's channel."""
+async def _deliver_images(ctx: ToolContext, urls: list, prompt: str,
+                          model: str) -> int:
+    """Post generated images into the channel. Returns how many landed."""
     channel = (ctx.bot.get_channel(ctx.channel_id)
                if ctx.bot and ctx.channel_id else None)
     if channel is None:
-        return False
-    builder = card("Generated image", description=prompt[:400], color=C_PURPLE)
-    builder.footer(model)
-    try:
-        if url.startswith("data:"):
-            raw = _decode_data_url(url)
-            if raw is None:
-                return False
-            builder.image("attachment://image.png")
-            await channel.send(
-                embed=builder.build(),
-                file=discord.File(io.BytesIO(raw), filename="image.png"))
-        else:
-            builder.image(url)
-            await channel.send(embed=builder.build())
-        return True
-    except discord.HTTPException:
-        return False
+        return 0
+    shown = urls[:_MAX_IMAGES]
+    delivered = 0
+    for index, url in enumerate(shown):
+        title = "Generated image"
+        if len(shown) > 1:
+            title = f"Generated image {index + 1}/{len(shown)}"
+        builder = card(title, description=prompt[:400], color=C_PURPLE)
+        builder.footer(model)
+        try:
+            if str(url).startswith("data:"):
+                raw = _decode_data_url(str(url))
+                if raw is None:
+                    continue
+                name = f"image{index}.png"
+                builder.image(f"attachment://{name}")
+                await channel.send(
+                    embed=builder.build(),
+                    file=discord.File(io.BytesIO(raw), filename=name))
+            else:
+                builder.image(str(url))
+                await channel.send(embed=builder.build())
+            delivered += 1
+        except discord.HTTPException:
+            continue
+    return delivered
 
 
 async def _deliver_video(bot, channel_id: int, url: str, prompt: str,
-                         model: str) -> None:
+                         model: str, cost=None) -> None:
     """Download a finished video and post it into the channel."""
     channel = bot.get_channel(channel_id) if bot else None
     if channel is None:
@@ -383,8 +407,9 @@ async def _deliver_video(bot, channel_id: int, url: str, prompt: str,
                       "The video was generated but could not be downloaded: "
                       + str(download["error"]), C_ERROR)
         return
+    footer = f"{model}  -  ${cost}" if cost else model
     builder = card("Generated video", description=prompt[:400], color=C_PURPLE)
-    builder.footer(model)
+    builder.footer(footer)
     try:
         await channel.send(
             embed=builder.build(),
@@ -407,14 +432,16 @@ async def _poll_video_job(bot, channel_id: int, polling_url: str,
             urls = status.get("unsigned_urls") or status.get("urls") or []
             if isinstance(urls, str):
                 urls = [urls]
+            cost = (status.get("usage") or {}).get("cost")
             if urls:
-                await _deliver_video(bot, channel_id, str(urls[0]), prompt, model)
+                await _deliver_video(bot, channel_id, str(urls[0]),
+                                     prompt, model, cost)
             else:
                 await _notify(bot, channel_id, "Video generation finished",
                               "The video completed but returned no file.",
                               C_ERROR)
             return
-        if state in ("failed", "canceled", "cancelled"):
+        if state in ("failed", "canceled", "cancelled", "expired"):
             await _notify(bot, channel_id, "Video generation failed",
                           str(status.get("error") or "the job did not succeed"),
                           C_ERROR)
@@ -428,15 +455,22 @@ async def _generate_image(args: dict, ctx: ToolContext) -> dict:
     if not prompt:
         return {"error": "prompt is required"}
     pick = await resolve_model(ctx.db, ctx.guild_id, "image")
-    result = await generate_image(prompt, model=pick.model)
+    result = await generate_image(
+        prompt, model=pick.model,
+        aspect_ratio=_opt_text(args.get("aspect_ratio")),
+        image_size=_opt_text(args.get("image_size")),
+        input_image=_opt_url(args.get("input_image")),
+    )
     if result.get("error"):
         return {"error": result["error"]}
-    delivered = await _deliver_image(ctx, result["image"], prompt, pick.model)
+    images = result.get("images") or []
+    delivered = await _deliver_images(ctx, images, prompt, pick.model)
     return {
         "ok": True,
         "model": pick.model,
+        "images_generated": len(images),
         "delivered": delivered,
-        "note": ("The image has been posted into the channel as an embed."
+        "note": (f"{delivered} image(s) posted into the channel as embeds."
                  if delivered else
                  "The image was generated but could not be posted."),
     }
@@ -448,8 +482,21 @@ async def _generate_video(args: dict, ctx: ToolContext) -> dict:
         return {"error": "prompt is required"}
     if ctx.bot is None or not ctx.channel_id:
         return {"error": "video generation needs a channel to deliver to"}
+    duration = args.get("duration")
+    try:
+        duration = int(duration) if duration is not None else None
+    except (TypeError, ValueError):
+        duration = None
+    audio = args.get("generate_audio")
     pick = await resolve_model(ctx.db, ctx.guild_id, "video")
-    submission = await submit_video(prompt, model=pick.model)
+    submission = await submit_video(
+        prompt, model=pick.model,
+        aspect_ratio=_opt_text(args.get("aspect_ratio")),
+        resolution=_opt_text(args.get("resolution")),
+        duration=duration,
+        generate_audio=audio if isinstance(audio, bool) else None,
+        first_frame=_opt_url(args.get("first_frame_image")),
+    )
     if submission.get("error"):
         return {"error": submission["error"]}
     task = asyncio.create_task(_poll_video_job(
@@ -560,23 +607,62 @@ def build_default_registry() -> ToolRegistry:
         "image.generate",
         "Generate an image from a text description and post it into the "
         "channel. Use when a user asks you to draw, paint, create, make or "
-        "generate a picture or image.",
+        "generate a picture or image. Pass input_image to edit or restyle an "
+        "image the user provided instead of generating from scratch.",
         {"type": "object", "properties": {
             "prompt": {"type": "string",
                        "description": "A detailed description of the image."},
+            "aspect_ratio": {
+                "type": "string",
+                "enum": ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4",
+                         "16:9", "9:16", "21:9"],
+                "description": "Shape of the image. Default 1:1.",
+            },
+            "image_size": {
+                "type": "string", "enum": ["1K", "2K", "4K"],
+                "description": "Image resolution. Default 1K.",
+            },
+            "input_image": {
+                "type": "string",
+                "description": "Optional http(s) URL of an existing image to "
+                               "edit or restyle (image-to-image).",
+            },
         }, "required": ["prompt"]},
         _generate_image, category="media", risk=RISK_SAFE,
-        result_fields=("ok", "model", "delivered", "note"),
+        result_fields=("ok", "model", "images_generated", "delivered", "note"),
     ))
     reg.register(ToolSpec(
         "video.generate",
         "Start generating a video from a text description. Video generation "
         "is slow: this returns immediately and the finished video is posted "
         "into the channel automatically when it is ready. Use when a user "
-        "asks you to make or generate a video.",
+        "asks you to make or generate a video. Pass first_frame_image to "
+        "animate an image the user provided.",
         {"type": "object", "properties": {
             "prompt": {"type": "string",
                        "description": "A detailed description of the video."},
+            "aspect_ratio": {
+                "type": "string",
+                "enum": ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"],
+                "description": "Shape of the video. Default 16:9.",
+            },
+            "resolution": {
+                "type": "string", "enum": ["480p", "720p", "1080p"],
+                "description": "Video resolution.",
+            },
+            "duration": {
+                "type": "integer",
+                "description": "Video length in seconds.",
+            },
+            "generate_audio": {
+                "type": "boolean",
+                "description": "Whether to generate a soundtrack with the video.",
+            },
+            "first_frame_image": {
+                "type": "string",
+                "description": "Optional http(s) URL of an image to use as the "
+                               "opening frame (image-to-video).",
+            },
         }, "required": ["prompt"]},
         _generate_video, category="media", risk=RISK_SAFE,
         result_fields=("ok", "model", "status", "note"),
