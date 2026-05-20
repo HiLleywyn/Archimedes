@@ -1,14 +1,23 @@
 # Archimedes
 
-A standalone AI chat bot for Discord. Archimedes is a memory-backed conversational
-companion: mention it, reply to it, use `.ask`, or just message it directly,
-and it answers with a persona-driven model while learning who it is talking to.
+A personal-assistant application that lives in Discord. Archimedes is a
+memory-backed conversational companion with a coherent product surface:
+an editable system-prompt **Soul**, an autonomous **Heartbeat** self-check
+loop, durable **Scheduled Tasks**, **MCP** server integration, a
+**Dynamic UI** card layer, and a multi-provider **Service Chain** with
+fallback. Discord is one **channel** into this application; the same
+agent can run behind a web, CLI or voice transport without rewriting any
+of the assistant logic. See `docs/architecture.md` for the full picture.
 
-It is fully self-contained: the `.ai` and `.arch` command groups, per-user /
-per-channel / per-server context learning, the tool-calling loop and the
-memory sidecar all ship with their own framework, config, database schema and
-entry point. There are no external service dependencies beyond the model
-provider, PostgreSQL and (optionally) Redis.
+Mention it, reply to it, use `.ask`, or just message it directly, and it
+answers with a persona-driven model while learning who it is talking to.
+
+It is fully self-contained: the `.ai`, `.arch`, and `.app` command groups,
+per-user / per-channel / per-server context learning, the tool-calling
+loop, the application layer (`arch/`), the channel layer (`channels/`)
+and the memory sidecar all ship with their own framework, config,
+database schema and entry point. There are no external service
+dependencies beyond the model provider, PostgreSQL and (optionally) Redis.
 
 This bot lives at the root of its own repository. `main.py` is the entry
 point, `requirements.txt` / `pyproject.toml` declare the dependencies,
@@ -17,6 +26,26 @@ runs the test suite.
 
 ## What it does
 
+- **Soul** -- an editable system-prompt persona with named presets
+  (default, short, tutor, creative, expert). Switch at runtime with
+  `.app soul preset <name>` or write a custom soul with `.app soul set`.
+  The active soul lives in the database, so it survives restarts.
+- **Heartbeat** -- an optional autonomous self-check loop. Every N
+  minutes during a configured active-hours window, the assistant reviews
+  its memories and pending tasks; when something needs attention it
+  speaks up. Off by default; opt in with `ARCHIMEDES_HEARTBEAT_ENABLED=1`.
+- **Scheduled Tasks** -- durable one-shot and cron-style tasks survive
+  restarts and fire back into the channel that scheduled them.
+- **MCP integration** -- declare Model Context Protocol servers at boot
+  through `ARCHIMEDES_MCP_SERVERS` or add them live with `.app mcp add`.
+  HTTP and stdio transports are supported; the discovered tools bridge
+  into the agent's tool registry alongside the built-ins.
+- **Dynamic UI** -- replies can be more than a chat bubble: structured
+  cards with title, big-number tiles, sections, buttons and follow-up
+  suggestions render natively as Discord embeds plus interactive views.
+- **Service Chain** -- an ordered list of model providers with per-
+  provider circuit breakers. When OpenRouter errors, the chain falls
+  through to the next entry without the user noticing.
 - **Conversational chat** -- replies to `@mentions`, replies to its own
   messages, direct messages, the `.ask` command, and optional ambient
   chime-ins.

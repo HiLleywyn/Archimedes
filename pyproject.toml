@@ -1,7 +1,7 @@
 [project]
 name = "archimedes"
-version = "1.0.0"
-description = "A standalone, memory-backed AI chat bot for Discord."
+version = "3.0.0"
+description = "A personal-assistant application that lives in Discord -- Soul, Heartbeat, Scheduler, MCP, Dynamic UI and a multi-provider service chain on top of a Discord channel."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

@@ -33,6 +33,7 @@ COGS: tuple[str, ...] = (
     "cogs.archimedes",
     "cogs.ai_admin",
     "cogs.sidecar",
+    "cogs.arch_app",
 )
 
 
@@ -60,6 +61,8 @@ class ArchimedesBot(commands.Bot):
         self.training = None      # ai.training.TrainingLogger
         self.plugins = None       # framework.plugins.PluginManager
         self.agent_sidecar = None  # ai.agent_sidecar.AgentSidecar
+        self.arch = None          # arch.core.ArchAgent
+        self.discord_channel = None  # channels.discord_channel.DiscordChannel
         # Bounded ring of message ids the bot sent as AI replies. Used to
         # tell "user replied to one of my answers" from "user replied to
         # someone else" without a DB round-trip.
@@ -95,6 +98,40 @@ class ArchimedesBot(commands.Bot):
         self.memory = MemoryService(self.db, self.short_term)
         self.training = TrainingLogger(self.db)
         self.tools = build_default_registry()
+
+        # Archimedes built-in tools (kai.time -> arch.time and friends) plug
+        # into the same registry the existing tools live on, so a single turn
+        # sees both surfaces.
+        from arch.tools.builtin import register_builtin_tools
+        try:
+            register_builtin_tools(self.tools)
+        except Exception:  # noqa: BLE001
+            log.exception("failed to register Archimedes built-in tools")
+
+        # Bring up the ArchAgent and its Discord channel adapter. The agent
+        # owns Soul, Memories, Scheduler, Heartbeat, MCP and the service
+        # chain; the channel adapter is what scheduled tasks and the
+        # heartbeat broadcast through.
+        from arch.config import ArchConfig
+        from arch.core import ArchAgent
+        from channels.discord_channel import DiscordChannel
+
+        self.arch = ArchAgent(
+            config=ArchConfig.from_env(),
+            db=self.db,
+            memory_service=self.memory,
+            tool_registry=self.tools,
+        )
+        try:
+            await self.arch.start()
+        except Exception:  # noqa: BLE001
+            log.exception("ArchAgent failed to start")
+
+        try:
+            self.discord_channel = DiscordChannel(self.arch, self)
+            await self.discord_channel.start()
+        except Exception:  # noqa: BLE001
+            log.exception("Discord channel failed to start")
 
         # The agent loop prefers the OpenRouter Agent SDK sidecar; starting it
         # never blocks the bot -- a failure here just leaves the in-process
@@ -215,6 +252,16 @@ class ArchimedesBot(commands.Bot):
                 await self._watchdog_task
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
+        try:
+            if self.discord_channel is not None:
+                await self.discord_channel.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if self.arch is not None:
+                await self.arch.stop()
+        except Exception:  # noqa: BLE001
+            pass
         try:
             if self.plugins is not None:
                 await self.plugins.shutdown()

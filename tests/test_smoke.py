@@ -25,7 +25,15 @@ _MODULES = [
     "ai.tools", "ai.workspace", "ai.agent_control", "ai.agent_sidecar",
     "ai.training", "ai.emoji_index",
     "cogs.meta", "cogs.chat_views", "cogs.chat", "cogs.archimedes",
-    "cogs.ai_admin", "cogs.sidecar",
+    "cogs.ai_admin", "cogs.sidecar", "cogs.arch_app",
+    # ── Archimedes 3.0 application layer ──────────────────────────────────
+    "arch", "arch.config", "arch.core", "arch.dynamic_ui",
+    "arch.heartbeat", "arch.mcp", "arch.memories", "arch.scheduler",
+    "arch.services", "arch.soul", "arch.tools", "arch.tools.builtin",
+    "arch.version",
+    "channels", "channels.base", "channels.discord_channel",
+    "channels.policy", "channels.renderers", "channels.session",
+    "channels.streaming",
 ]
 
 # The plugin files that ship in plugins/ and load on every boot.

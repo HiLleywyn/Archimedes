@@ -281,3 +281,74 @@ DROP TABLE IF EXISTS productivity_items;
 DROP TABLE IF EXISTS productivity_group_invites;
 DROP TABLE IF EXISTS productivity_group_members;
 DROP TABLE IF EXISTS productivity_groups;
+
+-- ── Archimedes application layer ──────────────────────────────────────────
+-- Tables that back the application surface introduced in 3.0: the editable
+-- soul (system-prompt), the heartbeat self-check log, durable scheduled
+-- tasks, configured MCP servers, and a small key/value store for assistant
+-- settings that an operator flips at runtime. Existing memory/trait tables
+-- above stay -- the application layer wraps them rather than replacing
+-- them, so a 2.x deployment upgrades in place.
+
+-- One row per soul scope ('default' for a single-tenant deployment; future
+-- per-guild souls would live under the guild id as a string).
+CREATE TABLE IF NOT EXISTS archimedes_soul (
+    id          TEXT PRIMARY KEY DEFAULT 'default',
+    prompt      TEXT NOT NULL,
+    preset_name TEXT,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Heartbeat run history. The recent-activity strip on the agent settings
+-- card reads from this; a low-volume table, no index needed beyond the
+-- implicit primary key.
+CREATE TABLE IF NOT EXISTS archimedes_heartbeat_log (
+    id          BIGSERIAL PRIMARY KEY,
+    ran_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    status      TEXT NOT NULL,
+    detail      TEXT,
+    duration_ms INTEGER
+);
+
+-- Durable scheduled tasks. ``payload`` carries the prompt and channel
+-- context, so a restart re-creates exactly the same turn the user asked
+-- for. Status flows pending -> running -> done/failed; cron tasks revert
+-- pending after each fire.
+CREATE TABLE IF NOT EXISTS archimedes_scheduled_tasks (
+    id          BIGSERIAL PRIMARY KEY,
+    owner_id    BIGINT,
+    kind        TEXT NOT NULL,
+    cron_expr   TEXT,
+    run_at      TIMESTAMPTZ,
+    payload     JSONB NOT NULL DEFAULT '{}',
+    status      TEXT NOT NULL DEFAULT 'pending',
+    last_run_at TIMESTAMPTZ,
+    next_run_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_archimedes_scheduled_due
+    ON archimedes_scheduled_tasks (status, kind, run_at);
+
+-- MCP servers added at runtime. Servers declared in ARCHIMEDES_MCP_SERVERS
+-- are not stored here -- the env var is the source of truth for the
+-- declared set; this table only persists the "add a server from chat"
+-- intent so it survives a restart.
+CREATE TABLE IF NOT EXISTS archimedes_mcp_servers (
+    name      TEXT PRIMARY KEY,
+    transport TEXT NOT NULL,
+    url       TEXT,
+    command   TEXT,
+    args      JSONB,
+    enabled   BOOLEAN NOT NULL DEFAULT TRUE,
+    added_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Operator-settable application toggles. The ``key`` column maps loosely
+-- to the env var names (lower-cased, ARCHIMEDES_ prefix dropped); the
+-- ``value`` column is a JSON blob so a boolean toggle and a structured
+-- preset both fit. The ArchAgent merges these over the env-derived config
+-- at boot.
+CREATE TABLE IF NOT EXISTS archimedes_settings (
+    key        TEXT PRIMARY KEY,
+    value      JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

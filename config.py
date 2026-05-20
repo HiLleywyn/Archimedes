@@ -193,6 +193,47 @@ class Config:
     WORKSPACE_SHELL_ENABLED: bool = _env_bool("WORKSPACE_SHELL_ENABLED", True)
     WORKSPACE_SHELL_TIMEOUT_S: int = _env_int("WORKSPACE_SHELL_TIMEOUT_S", 5)
 
+    # ── Archimedes application layer (3.0) ────────────────────────────────────
+    # The settings that lift Archimedes from "Discord bot" to "personal
+    # assistant application". Every one of these defaults to a no-op so an
+    # existing 2.x deployment keeps behaving exactly as before until an
+    # operator opts in. See arch/config.py for the typed view.
+    ARCHIMEDES_SOUL: str = _env("ARCHIMEDES_SOUL", "")
+    ARCHIMEDES_SOUL_PRESET: str = _env("ARCHIMEDES_SOUL_PRESET", "default")
+    ARCHIMEDES_DYNAMIC_UI_ENABLED: bool = _env_bool(
+        "ARCHIMEDES_DYNAMIC_UI_ENABLED", True)
+    # Heartbeat: off by default so a fresh deployment never spends model
+    # tokens unprompted. Interval is in minutes; active hours form a
+    # window (start hour inclusive, end hour exclusive).
+    ARCHIMEDES_HEARTBEAT_ENABLED: bool = _env_bool(
+        "ARCHIMEDES_HEARTBEAT_ENABLED", False)
+    ARCHIMEDES_HEARTBEAT_INTERVAL: int = _env_int(
+        "ARCHIMEDES_HEARTBEAT_INTERVAL", 30)
+    ARCHIMEDES_HEARTBEAT_HOUR_START: int = _env_int(
+        "ARCHIMEDES_HEARTBEAT_HOUR_START", 8)
+    ARCHIMEDES_HEARTBEAT_HOUR_END: int = _env_int(
+        "ARCHIMEDES_HEARTBEAT_HOUR_END", 22)
+    ARCHIMEDES_HEARTBEAT_PROMPT: str = _env("ARCHIMEDES_HEARTBEAT_PROMPT", "")
+    ARCHIMEDES_HEARTBEAT_MODEL: str = _env("ARCHIMEDES_HEARTBEAT_MODEL", "")
+    # Scheduler: on by default but inert until tasks are added.
+    ARCHIMEDES_SCHEDULER_ENABLED: bool = _env_bool(
+        "ARCHIMEDES_SCHEDULER_ENABLED", True)
+    ARCHIMEDES_SCHEDULER_POLL_SECONDS: int = _env_int(
+        "ARCHIMEDES_SCHEDULER_POLL_SECONDS", 15)
+    ARCHIMEDES_SCHEDULER_MAX_CONCURRENT: int = _env_int(
+        "ARCHIMEDES_SCHEDULER_MAX_CONCURRENT", 2)
+    # MCP server declarations and the model service fallback chain. Both
+    # are parsed by arch/config.py; the strings here are the raw operator
+    # input so a single point reads the environment.
+    ARCHIMEDES_MCP_SERVERS: str = _env("ARCHIMEDES_MCP_SERVERS", "")
+    ARCHIMEDES_SERVICES: list[str] = _env_list("ARCHIMEDES_SERVICES")
+    # Discord channel policies. Allowlists default empty -- a closed mode
+    # without an allowlist denies everything, which is the secure default.
+    DISCORD_DM_POLICY: str = _env("DISCORD_DM_POLICY", "allowlist")
+    DISCORD_GUILD_POLICY: str = _env("DISCORD_GUILD_POLICY", "allowlist")
+    DISCORD_DM_ALLOW_USERS: list[str] = _env_list("DISCORD_DM_ALLOW_USERS")
+    DISCORD_GUILD_ALLOW: list[str] = _env_list("DISCORD_GUILD_ALLOW")
+
     @classmethod
     def validate(cls) -> list[str]:
         """Return a list of fatal configuration problems (empty when OK)."""
