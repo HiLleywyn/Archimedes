@@ -236,6 +236,12 @@ def build_help_categories(p: str) -> dict[str, list[discord.Embed]]:
             f"`{p}ai audit` -- the recent staff audit feed\n"
             f"`{p}ai clearhistory` / `{p}ai forget` / `{p}ai recontext` -- "
             f"reset learned context",
+        )
+        .field(
+            "Lifecycle (owner only)",
+            f"`{p}ai restart` -- gracefully reconnect by re-execing\n"
+            f"`{p}ai shutdown` -- close cleanly and exit\n"
+            f"`/restart` -- slash equivalent of `{p}ai restart`",
         ),
     ], "Staff controls")
 
